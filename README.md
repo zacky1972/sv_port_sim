@@ -1,6 +1,6 @@
 # SvPortSim
 
-**TODO: Add description**
+SvPortSim: Elixir interface for driving Verilated SystemVerilog modules through Ports, with each simulation instance managed as a GenServer.
 
 ## Installation
 
