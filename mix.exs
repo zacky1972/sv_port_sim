@@ -9,7 +9,8 @@ defmodule SvPortSim.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "Sv port sim",
-      description: "TODO: write a proper description",
+      description:
+        "SvPortSim: Elixir interface for driving Verilated SystemVerilog modules through Ports, with each simulation instance managed as a GenServer.",
       docs: docs(),
       package: package(),
       aliases: aliases(),
