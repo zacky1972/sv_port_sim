@@ -181,8 +181,4 @@ defmodule SvPortSim.Rtl do
       {:error, {:invalid_module_name, module_name}}
     end
   end
-
-  defp validate_module_name(module_name) do
-    {:error, {:invalid_module_name, module_name}}
-  end
 end
