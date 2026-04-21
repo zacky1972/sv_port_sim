@@ -27,6 +27,7 @@
     "Verilator",
     "Verilated",
     "endmodule",
-    "basenames"
+    "basenames",
+    "contextp"
   ]
 }
