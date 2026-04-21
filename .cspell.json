@@ -24,7 +24,9 @@
     "test"
   ],
   "words": [
+    "Verilator",
     "Verilated",
-    "endmodule"
+    "endmodule",
+    "basenames"
   ]
 }
