@@ -106,19 +106,19 @@ defmodule SvPortSim.Protocol do
   Returns the MVP protocol version.
   """
   @spec version() :: version()
-  def version, do: @version
+  def version(), do: @version
 
   @doc """
   Returns the maximum JSON payload size in bytes.
   """
   @spec max_payload_size() :: pos_integer()
-  def max_payload_size, do: @max_payload_size
+  def max_payload_size(), do: @max_payload_size
 
   @doc """
   Returns the recommended Elixir port options for the MVP wire format.
   """
   @spec port_options() :: [:binary | :exit_status | {:packet, 4}]
-  def port_options, do: [:binary, {:packet, 4}, :exit_status]
+  def port_options(), do: [:binary, {:packet, 4}, :exit_status]
 
   @doc """
   Encodes a protocol envelope into JSON payload bytes.
