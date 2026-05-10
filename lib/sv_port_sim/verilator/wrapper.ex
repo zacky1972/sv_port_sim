@@ -1,6 +1,20 @@
 defmodule SvPortSim.Verilator.Wrapper do
   @moduledoc """
-  Generates minimal C++ wrappers for Verilated SystemVerilog top modules.
+  Builds minimal C++ wrapper files for Verilated SystemVerilog top modules.
+
+  This module generates the small C++ program used to instantiate a
+  Verilator-generated top-module class, run one `eval()` call, call `final()`,
+  and exit. The generated wrapper is intended for compilation and smoke-test
+  purposes, not for driving a full simulation.
+
+  The `top_module` argument is the SystemVerilog top-module name without
+  Verilator's `V` class-name prefix. For example, `"Counter"` maps to the
+  Verilator-generated class `VCounter` and to the wrapper file
+  `Counter_wrapper.cpp`.
+
+  Accepted top-module names are limited to a safe identifier subset: the name
+  must start with an ASCII letter or underscore, followed by ASCII letters,
+  digits, underscores, or dollar signs.
   """
 
   @sv_identifier ~r/\A[A-Za-z_][A-Za-z0-9_$]*\z/
@@ -8,7 +22,23 @@ defmodule SvPortSim.Verilator.Wrapper do
   @type top_module :: String.t()
 
   @doc """
-  Returns the default C++ wrapper file name for a top module.
+  Returns the default C++ wrapper filename for `top_module`.
+
+  The filename is formed by appending `_wrapper.cpp` to the validated
+  top-module name.
+
+  Returns `{:ok, filename}` on success.
+
+  Returns `{:error, {:invalid_top_module, top_module}}` when `top_module` is
+  not a binary or does not satisfy the accepted identifier format.
+
+  ## Examples
+
+      iex> SvPortSim.Verilator.Wrapper.filename("Counter")
+      {:ok, "Counter_wrapper.cpp"}
+
+      iex> SvPortSim.Verilator.Wrapper.filename("../Counter")
+      {:error, {:invalid_top_module, "../Counter"}}
   """
   @spec filename(term()) :: {:ok, String.t()} | {:error, term()}
   def filename(top_module) when is_binary(top_module) do
@@ -22,10 +52,28 @@ defmodule SvPortSim.Verilator.Wrapper do
   end
 
   @doc """
-  Generates a minimal C++ wrapper source for a Verilated top module.
+  Generates the C++ wrapper source for `top_module`.
 
-  The generated wrapper only instantiates the model, calls `eval/0` once,
-  calls `final/0`, and exits. It is intended as a compile smoke wrapper.
+  The generated source includes the Verilator-generated header
+  `"V<top_module>.h"` and `verilated.h`. Its `main` function creates a
+  `VerilatedContext`, passes command-line arguments to it, instantiates
+  `V<top_module>`, calls `eval()` once, calls `final()`, releases the allocated
+  objects, and returns `0`.
+
+  Returns `{:ok, source}` on success.
+
+  Returns `{:error, {:invalid_top_module, top_module}}` when `top_module` is
+  not a binary or does not satisfy the accepted identifier format.
+
+  ## Examples
+
+      iex> {:ok, source} = SvPortSim.Verilator.Wrapper.source("Counter")
+      iex> source =~ ~s(#include "VCounter.h")
+      true
+      iex> source =~ "top->eval();"
+      true
+      iex> source =~ "top->final();"
+      true
   """
   @spec source(term()) :: {:ok, String.t()} | {:error, term()}
   def source(top_module) when is_binary(top_module) do
@@ -39,9 +87,28 @@ defmodule SvPortSim.Verilator.Wrapper do
   end
 
   @doc """
-  Writes a minimal C++ wrapper into `dir`.
+  Writes the generated C++ wrapper source for `top_module` into `dir`.
 
-  Returns the written file path.
+  The output file is named with `filename/1` and placed directly under `dir`.
+  The directory is created if it does not already exist. If the destination file
+  already exists, it is overwritten.
+
+  Returns `{:ok, path}` on success.
+
+  Returns one of the following error tuples:
+
+    * `{:error, {:invalid_arguments, top_module, dir}}` when either argument is
+      not a binary
+    * `{:error, {:invalid_top_module, top_module}}` when `top_module` is a
+      binary but does not satisfy the accepted identifier format
+    * `{:error, {:mkdir_failed, dir, reason}}` when creating `dir` fails
+    * `{:error, {:write_failed, path, reason}}` when writing the wrapper source
+      fails
+
+  ## Example
+
+      dir = Path.join(System.tmp_dir!(), "sv_port_sim_wrappers")
+      {:ok, path} = SvPortSim.Verilator.Wrapper.write("Counter", dir)
   """
   @spec write(term(), term()) :: {:ok, Path.t()} | {:error, term()}
   def write(top_module, dir) when is_binary(top_module) and is_binary(dir) do

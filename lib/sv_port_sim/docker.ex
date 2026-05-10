@@ -1,6 +1,19 @@
 defmodule SvPortSim.Docker do
   @moduledoc """
-  Utilities for detecting whether Docker is available on the host system.
+  Detects whether Docker is installed and usable on the host system.
+
+  This module provides a small probe for Docker availability. It checks both
+  the Docker client executable and the Docker daemon because a host may have
+  the `docker` command installed while the daemon is stopped, unreachable, or
+  inaccessible to the current user.
+
+  `executable/0` only checks whether the `docker` executable can be found in
+  `PATH`. `check/0` performs the full availability check by running Docker
+  version commands and collecting the client and server versions. `available?/0`
+  is a boolean convenience wrapper around `check/0`.
+
+  The functions in this module do not install Docker, start the Docker daemon,
+  or modify Docker state.
   """
 
   @type check_result ::
@@ -18,7 +31,18 @@ defmodule SvPortSim.Docker do
           | {:docker_unavailable, non_neg_integer(), String.t()}
 
   @doc """
-  Returns the path to the Docker executable if it is available in PATH.
+  Returns the path to the Docker executable.
+
+  This function searches for `docker` in the current process `PATH` by using
+  `System.find_executable/1`.
+
+  Returns `{:ok, path}` when the executable is found.
+
+  Returns `{:error, :docker_not_found}` when the executable is not available in
+  `PATH`.
+
+  This function does not check whether the Docker daemon is running. Use
+  `check/0` or `available?/0` when daemon connectivity also matters.
   """
   @spec executable() :: {:ok, Path.t()} | {:error, :docker_not_found}
   def executable() do
@@ -29,7 +53,21 @@ defmodule SvPortSim.Docker do
   end
 
   @doc """
-  Returns true if Docker executable exists and the Docker daemon is reachable.
+  Returns whether Docker is installed and usable.
+
+  This is a boolean convenience wrapper around `check/0`.
+
+  Returns `true` only when all of the following conditions are satisfied:
+
+    * the `docker` executable is found in `PATH`
+    * the Docker client version can be queried
+    * the Docker server version can be queried, which implies that the Docker
+      daemon is reachable by the current process
+
+  Returns `false` for all error cases, including a missing executable, a failed
+  Docker client command, or an unreachable Docker daemon.
+
+  Use `check/0` instead when the caller needs diagnostic details.
   """
   @spec available?() :: boolean()
   def available?() do
@@ -39,7 +77,28 @@ defmodule SvPortSim.Docker do
   @doc """
   Checks whether Docker is installed and usable.
 
-  This checks both the Docker client executable and daemon connectivity.
+  This function performs the full Docker probe. It first locates the Docker
+  executable with `executable/0`, then runs Docker version commands to obtain
+  both the client and server versions.
+
+  Returns `{:ok, info}` when Docker is usable. The returned map contains:
+
+    * `:executable` - the resolved path to the Docker executable
+    * `:client_version` - the Docker client version reported by the executable
+    * `:server_version` - the Docker server version reported by the daemon
+
+  Returns one of the following error tuples:
+
+    * `{:error, :docker_not_found}` when the `docker` executable cannot be found
+      in `PATH`
+    * `{:error, {:docker_command_failed, status, output}}` when a Docker client
+      command fails before daemon availability is established
+    * `{:error, {:docker_unavailable, status, output}}` when the Docker server
+      version cannot be queried, typically because the Docker daemon is stopped,
+      unreachable, or inaccessible to the current user
+
+  `status` is the command exit status and `output` is the trimmed combined
+  standard output and standard error from the Docker command.
   """
   @spec check() :: check_result()
   def check() do
