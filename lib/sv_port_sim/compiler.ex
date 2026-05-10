@@ -1,6 +1,24 @@
 defmodule SvPortSim.Compiler do
   @moduledoc """
-  High-level compiler pipeline for building Verilated SystemVerilog modules.
+  Coordinates the high-level build pipeline for Verilated SystemVerilog modules.
+
+  This module is a convenience facade over the lower-level build steps provided
+  by this package:
+
+    * `SvPortSim.Rtl.expand/2` writes in-memory SystemVerilog sources to RTL
+      files.
+    * `SvPortSim.Verilator.Wrapper.write/2` generates and writes the C++
+      wrapper source.
+    * `SvPortSim.Verilator.Docker.compile_executable/4` builds the Verilated
+      executable through Docker.
+
+  `compile/3` is intended for callers that have SystemVerilog source strings in
+  memory and want a single call to produce a Verilator executable. The current
+  implementation supports the Docker backend only.
+
+  This module writes files to disk and, by default, invokes Docker. It does not
+  run simulations, manage simulation processes, or communicate with generated
+  executables through ports.
   """
 
   alias SvPortSim.Rtl
@@ -15,6 +33,87 @@ defmodule SvPortSim.Compiler do
           executable: Path.t()
         }
 
+  @doc """
+  Compiles SystemVerilog sources into a Verilated executable.
+
+  `top_module` is the SystemVerilog top-module name. `sources` is a map from
+  module names to SystemVerilog source strings. The source map is validated and
+  written by `SvPortSim.Rtl.expand/2`.
+
+  Compilation performs the following steps in order:
+
+    1. expands the SystemVerilog source map into RTL files
+    2. writes a generated C++ wrapper for `top_module`
+    3. invokes the selected backend to build the Verilated executable
+
+  The current implementation supports only the Docker backend.
+
+  ## Options
+
+    * `:backend` - Backend to use. Defaults to `:docker`. Any value other than
+      `:docker` returns `{:error, {:unsupported_backend, backend}}`.
+
+    * `:wrapper_dir` - Directory where the generated C++ wrapper is written.
+      Defaults to:
+
+          Application.app_dir(:sv_port_sim, Path.join(["wrapper", top_module]))
+
+      The directory path is expanded before use.
+
+    * `:verilator_args` - Additional Verilator arguments. These are converted to
+      the Docker backend's `:extra_args` option. Defaults to `[]`.
+
+  All other options are forwarded to
+  `SvPortSim.Verilator.Docker.compile_executable/4` when the Docker backend is
+  used. Pipeline-only options such as `:backend`, `:wrapper_dir`, and
+  `:verilator_args` are not forwarded.
+
+  When passing additional Verilator arguments through this facade, use
+  `:verilator_args` instead of `:extra_args`.
+
+  ## Return value
+
+  Returns `{:ok, result}` on success.
+
+  The returned `result` map contains:
+
+    * `:top_module` - the top-module name passed to this function
+    * `:rtl` - the result returned by `SvPortSim.Rtl.expand/2`
+    * `:wrapper` - a map containing the generated wrapper file path
+    * `:build` - the backend build result
+    * `:executable` - the generated executable path
+
+  Returns `{:error, reason}` on failure.
+
+  Common error reasons include:
+
+    * `{:invalid_arguments, top_module, sources}` when `top_module` is not a
+      binary, `sources` is not a map, or `opts` is not a list
+    * `{:invalid_wrapper_dir, wrapper_dir}` when `:wrapper_dir` is not a binary
+    * `{:unsupported_backend, backend}` when `:backend` is not `:docker`
+
+  Errors from `SvPortSim.Rtl.expand/2`,
+  `SvPortSim.Verilator.Wrapper.write/2`, and
+  `SvPortSim.Verilator.Docker.compile_executable/4` are returned unchanged.
+
+  ## Example
+
+      sources = %{
+        "Counter" => "module Counter; endmodule"
+      }
+
+      {:ok, result} =
+        SvPortSim.Compiler.compile(
+          "Counter",
+          sources,
+          wrapper_dir: "/tmp/sv_port_sim/wrapper",
+          work_dir: "/tmp/sv_port_sim/work",
+          verilator_args: ["-Wall"]
+        )
+
+      result.executable
+      #=> "/tmp/sv_port_sim/work/obj_dir/VCounter"
+  """
   @spec compile(term(), term(), keyword()) :: {:ok, compile_result()} | {:error, term()}
   def compile(top_module, sources, opts \\ [])
 
