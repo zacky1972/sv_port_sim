@@ -21,8 +21,7 @@ defmodule SvPortSim.Protocol do
         "body": {}
       }
 
-  JSON object member order is not significant. Encoded examples in this
-  module use a stable minified order only for documentation.
+  JSON object member order is not significant.
 
   ## Port framing
 
@@ -39,55 +38,80 @@ defmodule SvPortSim.Protocol do
 
   The maximum JSON payload size is 1 MiB.
 
-      max_payload_size = 1_048_576
+  A zero-length payload is invalid. A payload larger than the maximum size is
+  a fatal protocol error.
 
-  A zero-length payload is invalid. A payload larger than the maximum size
-  is a fatal protocol error.
-
-  ## Versioning
+  ## Examples
 
   The MVP protocol version is `1`.
 
-  Receivers must reject payloads with unsupported protocol versions. If a
-  valid request id can be read, the receiver should return an error payload:
+      iex> SvPortSim.Protocol.version()
+      1
 
-      {
-        "v": 1,
-        "id": 1,
-        "kind": "error",
-        "op": "protocol_error",
-        "body": {
-          "reason": "unsupported_version",
-          "supported_versions": [1]
-        }
-      }
+  The maximum payload size is 1 MiB.
 
-  ## Encoded examples
+      iex> SvPortSim.Protocol.max_payload_size()
+      1_048_576
 
-  Request payload:
+  The recommended Elixir port options use binary mode and 4-byte packet
+  framing.
 
-      {"v":1,"id":1,"kind":"request","op":"hello","body":{"client":"sv_port_sim"}}
+      iex> SvPortSim.Protocol.port_options()
+      [:binary, {:packet, 4}, :exit_status]
 
-  Request frame bytes:
+  A valid envelope can be encoded to JSON payload bytes and decoded back.
 
-      <<0, 0, 0, 76>> <>
-        ~s({"v":1,"id":1,"kind":"request","op":"hello","body":{"client":"sv_port_sim"}})
+      iex> message = %{
+      ...>   "v" => 1,
+      ...>   "id" => 1,
+      ...>   "kind" => "request",
+      ...>   "op" => "hello",
+      ...>   "body" => %{"client" => "sv_port_sim"}
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(message)
+      iex> is_binary(payload)
+      true
+      iex> SvPortSim.Protocol.decode_payload(payload) == {:ok, message}
+      true
 
-  Response payload:
+  A full wire frame is a 4-byte big-endian length prefix followed by the JSON
+  payload bytes.
 
-      {"v":1,"id":1,"kind":"response","op":"hello","body":{"max_payload_size":1048576}}
+      iex> payload = ~s({"v":1,"id":1,"kind":"request","op":"hello","body":{"client":"sv_port_sim"}})
+      iex> byte_size(payload)
+      76
+      iex> {:ok, frame} = SvPortSim.Protocol.frame_payload(payload)
+      iex> <<length::32-big, rest::binary>> = frame
+      iex> {length, rest == payload}
+      {76, true}
 
-  Response frame bytes:
+  A zero-length payload is rejected.
 
-      <<0, 0, 0, 81>> <>
-        ~s({"v":1,"id":1,"kind":"response","op":"hello","body":{"max_payload_size":1048576}})
+      iex> SvPortSim.Protocol.frame_payload("")
+      {:error, :empty_payload}
+
+  An unsupported protocol version is rejected.
+
+      iex> SvPortSim.Protocol.validate_envelope(%{
+      ...>   "v" => 2,
+      ...>   "id" => 1,
+      ...>   "kind" => "request",
+      ...>   "op" => "hello",
+      ...>   "body" => %{}
+      ...> })
+      {:error, {:unsupported_version, 2, 1}}
+
+  Malformed JSON payloads are rejected.
+
+      iex> match?({:error, {:json_decode_failed, _}}, SvPortSim.Protocol.decode_payload("{"))
+      true
 
   ## Rationale
 
   The MVP uses length-prefixed JSON rather than line-based JSON so frame
-  boundaries and message-size limits are explicit. It avoids committing to
-  a bespoke binary command schema before the command protocol, signal
-  metadata schema, and supported SystemVerilog data subset are finalized.
+  boundaries and message-size limits are explicit. It avoids committing to a
+  bespoke binary command schema before the command protocol, signal metadata
+  schema, and supported SystemVerilog data subset are finalized.
   """
 
   @version 1
@@ -104,18 +128,33 @@ defmodule SvPortSim.Protocol do
 
   @doc """
   Returns the MVP protocol version.
+
+  ## Examples
+
+      iex> SvPortSim.Protocol.version()
+      1
   """
   @spec version() :: version()
   def version(), do: @version
 
   @doc """
   Returns the maximum JSON payload size in bytes.
+
+  ## Examples
+
+      iex> SvPortSim.Protocol.max_payload_size()
+      1_048_576
   """
   @spec max_payload_size() :: pos_integer()
   def max_payload_size(), do: @max_payload_size
 
   @doc """
   Returns the recommended Elixir port options for the MVP wire format.
+
+  ## Examples
+
+      iex> SvPortSim.Protocol.port_options()
+      [:binary, {:packet, 4}, :exit_status]
   """
   @spec port_options() :: [:binary | :exit_status | {:packet, 4}]
   def port_options(), do: [:binary, {:packet, 4}, :exit_status]
@@ -125,6 +164,19 @@ defmodule SvPortSim.Protocol do
 
   This returns the payload only. When using `{:packet, 4}`, do not manually
   prepend the length prefix before passing data to `Port.command/2`.
+
+  ## Examples
+
+      iex> message = %{
+      ...>   "v" => 1,
+      ...>   "id" => 1,
+      ...>   "kind" => "request",
+      ...>   "op" => "hello",
+      ...>   "body" => %{"client" => "sv_port_sim"}
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(message)
+      iex> SvPortSim.Protocol.decode_payload(payload) == {:ok, message}
+      true
   """
   @spec encode_payload(envelope()) :: {:ok, binary()} | {:error, term()}
   def encode_payload(message) when is_map(message) do
@@ -144,6 +196,15 @@ defmodule SvPortSim.Protocol do
 
   @doc """
   Decodes JSON payload bytes into a protocol envelope.
+
+  ## Examples
+
+      iex> payload = ~s({"v":1,"id":1,"kind":"request","op":"hello","body":{}})
+      iex> SvPortSim.Protocol.decode_payload(payload)
+      {:ok, %{"body" => %{}, "id" => 1, "kind" => "request", "op" => "hello", "v" => 1}}
+
+      iex> match?({:error, {:json_decode_failed, _}}, SvPortSim.Protocol.decode_payload("{"))
+      true
   """
   @spec decode_payload(binary()) :: {:ok, envelope()} | {:error, term()}
   def decode_payload(payload) when is_binary(payload) do
@@ -162,6 +223,17 @@ defmodule SvPortSim.Protocol do
   In normal Elixir port usage with `{:packet, 4}`, callers should send only
   the JSON payload. This helper exists to pin the externally visible frame
   format.
+
+  ## Examples
+
+      iex> payload = ~s({"v":1,"id":1,"kind":"request","op":"hello","body":{"client":"sv_port_sim"}})
+      iex> {:ok, frame} = SvPortSim.Protocol.frame_payload(payload)
+      iex> <<length::32-big, rest::binary>> = frame
+      iex> {length, rest == payload}
+      {76, true}
+
+      iex> SvPortSim.Protocol.frame_payload("")
+      {:error, :empty_payload}
   """
   @spec frame_payload(binary()) :: {:ok, binary()} | {:error, term()}
   def frame_payload(payload) when is_binary(payload) do
@@ -174,6 +246,35 @@ defmodule SvPortSim.Protocol do
 
   @doc """
   Validates the common protocol envelope.
+
+  ## Examples
+
+      iex> SvPortSim.Protocol.validate_envelope(%{
+      ...>   "v" => 1,
+      ...>   "id" => 1,
+      ...>   "kind" => "request",
+      ...>   "op" => "hello",
+      ...>   "body" => %{}
+      ...> })
+      :ok
+
+      iex> SvPortSim.Protocol.validate_envelope(%{
+      ...>   "v" => 2,
+      ...>   "id" => 1,
+      ...>   "kind" => "request",
+      ...>   "op" => "hello",
+      ...>   "body" => %{}
+      ...> })
+      {:error, {:unsupported_version, 2, 1}}
+
+      iex> SvPortSim.Protocol.validate_envelope(%{
+      ...>   "v" => 1,
+      ...>   "id" => 1,
+      ...>   "kind" => "command",
+      ...>   "op" => "hello",
+      ...>   "body" => %{}
+      ...> })
+      {:error, {:invalid_kind, "command"}}
   """
   @spec validate_envelope(term()) :: :ok | {:error, term()}
   def validate_envelope(%{
