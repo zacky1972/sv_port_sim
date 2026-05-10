@@ -3,6 +3,8 @@ defmodule SvPortSim.Verilator.WrapperTest do
 
   alias SvPortSim.Verilator.Wrapper
 
+  doctest Wrapper
+
   test "filename/1 returns default wrapper filename" do
     assert Wrapper.filename("Counter") == {:ok, "Counter_wrapper.cpp"}
   end
