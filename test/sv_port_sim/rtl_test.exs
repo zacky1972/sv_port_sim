@@ -3,6 +3,8 @@ defmodule SvPortSim.RtlTest do
 
   alias SvPortSim.Rtl
 
+  doctest Rtl
+
   test "source_filename/1 builds .sv filename from module name" do
     assert Rtl.source_filename("Counter") == {:ok, "Counter.sv"}
   end
