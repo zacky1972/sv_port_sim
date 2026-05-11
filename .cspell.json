@@ -44,6 +44,12 @@
     "normalizing",
     "normalise",
     "typeish",
-    "signedness"
+    "signedness",
+    "SignalSpec",
+    "inout",
+    "posedge",
+    "negedge",
+    "pokes",
+    "peeks"
   ]
 }
