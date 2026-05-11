@@ -65,7 +65,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ "while (true)"
   end
 
-    test "source/1 emits canonical response and error envelope helpers" do
+  test "source/1 emits canonical response and error envelope helpers" do
     assert {:ok, source} = Wrapper.source("Counter")
 
     assert source =~ "std::string response_envelope("

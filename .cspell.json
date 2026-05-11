@@ -67,6 +67,9 @@
     "constexpr",
     "gcount",
     "streamsize",
-    "cout"
+    "cout",
+    "cstdio",
+    "isalpha",
+    "isalnum"
   ]
 }

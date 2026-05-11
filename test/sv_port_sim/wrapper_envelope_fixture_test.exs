@@ -15,8 +15,7 @@ defmodule SvPortSim.WrapperEnvelopeFixtureTransport do
   end
 
   def request(%{"op" => "peek", "body" => %{"signal" => "missing"}} = request, state, _timeout) do
-    {:ok,
-     error_response(request, "invalid_signal", "unknown signal", %{"signal" => "missing"}),
+    {:ok, error_response(request, "invalid_signal", "unknown signal", %{"signal" => "missing"}),
      state}
   end
 
