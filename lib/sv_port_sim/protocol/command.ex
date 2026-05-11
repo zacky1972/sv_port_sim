@@ -2,11 +2,13 @@ defmodule SvPortSim.Protocol.Command do
   @moduledoc """
   Defines the MVP command and response protocol for the C++ wrapper process.
 
-  `SvPortSim.Protocol` defines the length-prefixed JSON envelope. This module
-  defines the commands carried by that envelope. The MVP command names are:
+  `SvPortSim.Protocol` defines the length-prefixed JSON envelope. This module defines the
+  commands carried by that envelope.
 
-    * `"metadata"` - discover the top module, signal metadata, protocol version,
-      and current simulation cycle
+  The MVP command names are:
+
+    * `"metadata"` - discover the top module, signal metadata, protocol version, and current
+      simulation cycle
     * `"reset"` - drive the wrapper-defined reset sequence
     * `"poke"` - assign one writable Verilated top-level signal
     * `"tick"` - advance the simulation by one or more clock cycles
@@ -15,26 +17,25 @@ defmodule SvPortSim.Protocol.Command do
 
   ## Runtime model and lifecycle
 
-  The MVP supports exactly one simulation instance per OS process. On startup,
-  the C++ wrapper constructs one `VerilatedContext` and one Verilated top-module
-  instance, initializes its internal cycle counter to `0`, then waits for framed
-  JSON requests on standard input. There is no `instance_id` field in the MVP.
+  The MVP supports exactly one simulation instance per OS process. On startup, the C++ wrapper
+  constructs one `VerilatedContext` and one Verilated top-module instance, initializes its
+  internal cycle counter to `0`, then waits for framed JSON requests on standard input. There is
+  no `instance_id` field in the MVP.
 
-  The protocol is synchronous. The Elixir side sends one request, waits for the
-  matching response, and only then sends the next request. The wrapper must read
-  requests in frame order and must emit exactly one response or error envelope
-  for each well-formed request envelope, using the same `id` and `op`.
+  The protocol is synchronous. The Elixir side sends one request, waits for the matching response,
+  and only then sends the next request. The wrapper must read requests in frame order and must
+  emit exactly one response or error envelope for each well-formed request envelope, using the
+  same `id` and `op`.
 
-  If the frame, JSON payload, or common envelope is not recoverable enough to
-  identify an `id`, the wrapper should treat that condition as a fatal protocol
-  error and exit non-zero. If an envelope is well formed but the command name,
-  body, signal name, value, or current simulator state is invalid, the wrapper
-  must return a `kind: "error"` envelope and keep running unless the error body
-  explicitly sets `"fatal" => true`.
+  If the frame, JSON payload, or common envelope is not recoverable enough to identify an `id`,
+  the wrapper should treat that condition as a fatal protocol error and exit non-zero. If an
+  envelope is well formed but the command name, body, signal name, value, unsupported feature, or
+  current simulator state is invalid, the wrapper must return a `kind: "error"` envelope and keep
+  running unless the error body explicitly sets `"fatal" => true`.
 
-  `"shutdown"` is the terminal command. After writing and flushing the successful
-  shutdown response, the wrapper calls `final()` on the Verilated model and exits
-  with status `0`. No further request is accepted by that process.
+  `"shutdown"` is the terminal command. After writing and flushing the successful shutdown
+  response, the wrapper calls `final()` on the Verilated model and exits with status `0`. No
+  further request is accepted by that process.
 
   ## Common request envelope
 
@@ -48,8 +49,8 @@ defmodule SvPortSim.Protocol.Command do
         "body": {"signal": "count"}
       }
 
-  Successful responses use `kind: "response"` and the same `id` and `op`.
-  Command failures use `kind: "error"` and this body shape:
+  Successful responses use `kind: "response"` and the same `id` and `op`. Command failures use
+  `kind: "error"` and the canonical runtime error body from `SvPortSim.Protocol.error_body/4`:
 
       {
         "code": "invalid_signal",
@@ -65,76 +66,62 @@ defmodule SvPortSim.Protocol.Command do
   ### `metadata`
 
     * Request body: `{}`
-    * Response body:
-      `%{"top" => top_module, "signals" => signal_specs, "cycle" => cycle}`
+    * Response body: `%{"top" => top_module, "signals" => signal_specs, "cycle" => cycle}`
     * Wrapper operation: return static metadata for the single model instance.
     * Idempotency: idempotent; it must not call `eval()` or advance time.
 
-  `signals` is a list of metadata objects. The command layer intentionally only
-  constrains it to a list; the exact signal metadata schema is owned by the
-  signal-spec contract.
+  `signals` is a list of metadata objects. The command layer intentionally only constrains it to
+  a list; the exact signal metadata schema is owned by the signal-spec contract.
 
   ### `reset`
 
-    * Request body: `%{"cycles" => positive_integer}`. `"cycles"` is optional
-      and defaults to `1`.
-    * Response body:
-      `%{"cycle" => cycle, "reset" => %{"cycles" => cycles}}`
-    * Wrapper operation: drive reset-role signal or signals active, advance the
-      requested number of cycles using the wrapper's clocking policy, deassert
-      reset, settle the model with `eval()`, and return the resulting cycle.
-    * Idempotency: not idempotent because it advances the cycle counter, even
-      though repeated resets should converge the model to its reset state.
+    * Request body: `%{"cycles" => positive_integer}`. `"cycles"` is optional and defaults to `1`.
+    * Response body: `%{"cycle" => cycle, "reset" => %{"cycles" => cycles}}`
+    * Wrapper operation: drive reset-role signal or signals active, advance the requested number
+      of cycles using the wrapper's clocking policy, deassert reset, settle the model with
+      `eval()`, and return the resulting cycle.
+    * Idempotency: not idempotent because it advances the cycle counter.
 
   ### `poke`
 
-    * Request body:
-      `%{"signal" => writable_signal_name, "value" => encoded_value}`
-    * Response body:
-      `%{"signal" => signal_name, "value" => encoded_value, "cycle" => cycle}`
-    * Wrapper operation: assign the decoded value to the matching Verilated
-      top-level field, call `eval()` once to settle combinational outputs, and
-      return the canonical value actually stored by the wrapper.
-    * Idempotency: idempotent for the same signal and value at the same cycle.
-      It must not advance the cycle counter.
+    * Request body: `%{"signal" => writable_signal_name, "value" => encoded_value}`
+    * Response body: `%{"signal" => signal_name, "value" => encoded_value, "cycle" => cycle}`
+    * Wrapper operation: assign the decoded value to the matching Verilated top-level field, call
+      `eval()` once to settle combinational outputs, and return the canonical value actually
+      stored by the wrapper.
+    * Idempotency: idempotent for the same signal and value at the same cycle. It must not advance
+      the cycle counter.
 
-  `encoded_value` is `%{"bits" => bit_string, "width" => positive_integer}`.
-  Bit strings are most-significant bit first and may contain `0`, `1`, `x`, and
-  `z`. Integer views should already be encoded through
-  `SvPortSim.Protocol.DataType` before they reach the wrapper.
+  `encoded_value` is `%{"bits" => bit_string, "width" => positive_integer}`. Bit strings are
+  most-significant bit first and may contain `0`, `1`, `x`, and `z`.
 
   ### `tick`
 
-    * Request body: `%{"cycles" => positive_integer, "clock" => signal_name}`.
-      Both fields are optional. `"cycles"` defaults to `1`. `"clock"` may be
-      omitted only when wrapper metadata defines exactly one clock signal.
-    * Response body:
-      `%{"cycle" => cycle, "clock" => clock_name, "cycles" => cycles}`
-    * Wrapper operation: for each requested cycle, perform one complete clock
-      cycle according to the wrapper's clocking policy and call `eval()` at each
-      driven edge needed by the generated model. Increment the cycle counter by
-      one per completed cycle.
+    * Request body: `%{"cycles" => positive_integer, "clock" => signal_name}`. Both fields are
+      optional. `"cycles"` defaults to `1`. `"clock"` may be omitted only when wrapper metadata
+      defines exactly one clock signal.
+    * Response body: `%{"cycle" => cycle, "clock" => clock_name, "cycles" => cycles}`
+    * Wrapper operation: for each requested cycle, perform one complete clock cycle according to
+      the wrapper's clocking policy and call `eval()` at each driven edge needed by the generated
+      model. Increment the cycle counter by one per completed cycle.
     * Idempotency: not idempotent because it advances simulation state.
 
   ### `peek`
 
     * Request body: `%{"signal" => readable_signal_name}`
-    * Response body:
-      `%{"signal" => signal_name, "value" => encoded_value, "cycle" => cycle}`
-    * Wrapper operation: read the matching Verilated top-level field after all
-      previous commands have completed. The wrapper may call `eval()` first if
-      needed to settle combinational outputs, but it must not advance the cycle
-      counter.
+    * Response body: `%{"signal" => signal_name, "value" => encoded_value, "cycle" => cycle}`
+    * Wrapper operation: read the matching Verilated top-level field after all previous commands
+      have completed. The wrapper may call `eval()` first if needed to settle combinational
+      outputs, but it must not advance the cycle counter.
     * Idempotency: idempotent when no intervening state-changing command occurs.
 
   ### `shutdown`
 
     * Request body: `{}`
     * Response body: `%{"status" => "closing"}`
-    * Wrapper operation: send the response, flush stdout, call `final()`, release
-      wrapper resources, and exit with status `0`.
-    * Idempotency: terminal. A second successful shutdown response is impossible
-      because the process exits after the first one.
+    * Wrapper operation: send the response, flush stdout, call `final()`, release resources, and
+      exit with status `0`.
+    * Idempotency: terminal.
 
   ## Examples
 
@@ -200,18 +187,31 @@ defmodule SvPortSim.Protocol.Command do
       iex> {:ok, error} = SvPortSim.Protocol.Command.error_response(request, "invalid_signal", "signal is not readable", %{"signal" => "count"})
       iex> {error["kind"], error["body"]["code"], error["body"]["fatal"]}
       {"error", "invalid_signal", false}
+
+  Fatal error responses can be built explicitly when the wrapper cannot safely continue.
+
+      iex> {:ok, error} = SvPortSim.Protocol.Command.error_response(9, "tick", "wrapper_fault", "segmentation fault", %{}, fatal: true)
+      iex> {error["kind"], error["body"]["code"], error["body"]["fatal"]}
+      {"error", "wrapper_fault", true}
   """
 
   alias SvPortSim.Protocol
 
   @command_names ~w(metadata reset poke tick peek shutdown)
-
   @error_codes ~w(
+    invalid_command
     unsupported_command
     invalid_request
     invalid_signal
     invalid_value
     invalid_state
+    unsupported_feature
+    protocol_error
+    timeout
+    malformed_output
+    simulator_exit
+    simulator_failure
+    port_closed
     wrapper_fault
   )
 
@@ -225,7 +225,8 @@ defmodule SvPortSim.Protocol.Command do
       },
       wrapper_operation: "Return static metadata for the single Verilated model instance.",
       idempotency: :idempotent,
-      errors: ~w(unsupported_command invalid_request invalid_state wrapper_fault)
+      errors:
+        ~w(unsupported_command invalid_request invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "reset",
@@ -245,7 +246,7 @@ defmodule SvPortSim.Protocol.Command do
         "Drive reset active, tick the requested cycles, deassert reset, and settle with eval().",
       idempotency: :state_changing,
       errors:
-        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state wrapper_fault)
+        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "poke",
@@ -264,7 +265,7 @@ defmodule SvPortSim.Protocol.Command do
       wrapper_operation: "Assign the top-level field, call eval(), and return the stored value.",
       idempotency: :idempotent_at_same_cycle,
       errors:
-        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state wrapper_fault)
+        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "tick",
@@ -284,7 +285,7 @@ defmodule SvPortSim.Protocol.Command do
       wrapper_operation: "Advance complete clock cycles and increment the cycle counter.",
       idempotency: :state_changing,
       errors:
-        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state wrapper_fault)
+        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "peek",
@@ -299,7 +300,8 @@ defmodule SvPortSim.Protocol.Command do
       },
       wrapper_operation: "Read the top-level field after previous commands complete.",
       idempotency: :read_only,
-      errors: ~w(unsupported_command invalid_request invalid_signal invalid_state wrapper_fault)
+      errors:
+        ~w(unsupported_command invalid_request invalid_signal invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "shutdown",
@@ -343,6 +345,9 @@ defmodule SvPortSim.Protocol.Command do
 
       iex> "invalid_signal" in SvPortSim.Protocol.Command.error_codes()
       true
+
+      iex> "unsupported_feature" in SvPortSim.Protocol.Command.error_codes()
+      true
   """
   @spec error_codes() :: [String.t()]
   def error_codes(), do: @error_codes
@@ -366,6 +371,7 @@ defmodule SvPortSim.Protocol.Command do
       iex> {:ok, spec} = SvPortSim.Protocol.Command.command_spec("poke")
       iex> spec.request.required["value"]
       "encoded_value"
+
       iex> SvPortSim.Protocol.Command.command_spec("step")
       {:error, {:unsupported_command, "step"}}
   """
@@ -402,6 +408,7 @@ defmodule SvPortSim.Protocol.Command do
 
       iex> SvPortSim.Protocol.Command.supported?("peek")
       true
+
       iex> SvPortSim.Protocol.Command.supported?("step")
       false
   """
@@ -416,6 +423,7 @@ defmodule SvPortSim.Protocol.Command do
       iex> {:ok, request} = SvPortSim.Protocol.Command.request("peek", 1, %{"signal" => "count"})
       iex> {request["v"], request["id"], request["kind"], request["op"]}
       {1, 1, "request", "peek"}
+
       iex> SvPortSim.Protocol.Command.request("peek", -1, %{"signal" => "count"})
       {:error, {:invalid_request_id, -1}}
   """
@@ -525,28 +533,43 @@ defmodule SvPortSim.Protocol.Command do
     do: {:error, {:invalid_request, request}}
 
   @doc """
-  Builds a validated error response envelope from an id, command, error code,
-  message, and details map.
+  Builds a validated error response envelope from an id, command, error code, message, and details map.
+
+  The default `fatal` value is derived from `SvPortSim.Protocol.fatal_runtime_error?/1`. Pass
+  `fatal: true` or `fatal: false` to override the default.
 
   ## Examples
 
       iex> {:ok, error} = SvPortSim.Protocol.Command.error_response(1, "step", "unsupported_command", "unsupported command", %{})
       iex> {error["op"], error["body"]["fatal"]}
       {"step", false}
+
+      iex> {:ok, error} = SvPortSim.Protocol.Command.error_response(1, "tick", "wrapper_fault", "segmentation fault", %{})
+      iex> {error["op"], error["body"]["fatal"]}
+      {"tick", true}
   """
   @spec error_response(term(), term(), term(), term(), term()) ::
           {:ok, envelope()} | {:error, term()}
-  def error_response(id, command, code, message, details)
-      when is_integer(id) and id >= 0 and is_binary(command) and byte_size(command) > 0 and
-             is_binary(code) and is_binary(message) and is_map(details) do
-    body = %{
-      "code" => code,
-      "message" => message,
-      "details" => details,
-      "fatal" => false
-    }
+  def error_response(id, command, code, message, details) do
+    error_response(id, command, code, message, details, [])
+  end
 
-    with :ok <- validate_error_body(body) do
+  @doc """
+  Builds a validated error response envelope and explicitly configures `fatal`.
+
+  ## Examples
+
+      iex> {:ok, error} = SvPortSim.Protocol.Command.error_response(1, "tick", "invalid_state", "stopped", %{}, fatal: true)
+      iex> error["body"]["fatal"]
+      true
+  """
+  @spec error_response(term(), term(), term(), term(), term(), keyword()) ::
+          {:ok, envelope()} | {:error, term()}
+  def error_response(id, command, code, message, details, opts)
+      when is_integer(id) and id >= 0 and is_binary(command) and byte_size(command) > 0 and
+             is_binary(code) and is_binary(message) and is_map(details) and is_list(opts) do
+    with {:ok, body} <- Protocol.error_body(code, message, details, opts),
+         :ok <- validate_error_body(body) do
       {:ok,
        %{
          "v" => Protocol.version(),
@@ -558,8 +581,8 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
-  def error_response(id, command, code, message, details) do
-    {:error, {:invalid_error_arguments, id, command, code, message, details}}
+  def error_response(id, command, code, message, details, opts) do
+    {:error, {:invalid_error_arguments, id, command, code, message, details, opts}}
   end
 
   @doc """
@@ -570,6 +593,7 @@ defmodule SvPortSim.Protocol.Command do
       iex> {:ok, request} = SvPortSim.Protocol.Command.request("tick", 1, %{"cycles" => 2})
       iex> SvPortSim.Protocol.Command.validate_request(request)
       :ok
+
       iex> SvPortSim.Protocol.Command.validate_request(%{"v" => 1, "id" => 1, "kind" => "request", "op" => "step", "body" => %{}})
       {:error, {:unsupported_command, "step"}}
   """
@@ -605,8 +629,8 @@ defmodule SvPortSim.Protocol.Command do
   @doc """
   Validates an error response envelope and error body.
 
-  Error responses may use an unsupported command name in `op`; this lets the
-  wrapper explicitly answer a well-formed request whose operation is unknown.
+  Error responses may use an unsupported command name in `op`; this lets the wrapper explicitly
+  answer a well-formed request whose operation is unknown.
 
   ## Examples
 
@@ -646,12 +670,12 @@ defmodule SvPortSim.Protocol.Command do
 
       iex> SvPortSim.Protocol.Command.validate_request_body("poke", %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}})
       :ok
+
       iex> SvPortSim.Protocol.Command.validate_request_body("poke", %{"signal" => "enable"})
       {:error, {:missing_field, "poke", "value"}}
   """
   @spec validate_request_body(term(), term()) :: :ok | {:error, term()}
   def validate_request_body(command, body)
-
   def validate_request_body("metadata", body), do: validate_empty_body("metadata", body)
 
   def validate_request_body("reset", %{} = body) do
@@ -696,6 +720,7 @@ defmodule SvPortSim.Protocol.Command do
 
       iex> SvPortSim.Protocol.Command.validate_response_body("peek", %{"signal" => "count", "value" => %{"bits" => "0001", "width" => 4}, "cycle" => 3})
       :ok
+
       iex> SvPortSim.Protocol.Command.validate_response_body("shutdown", %{"status" => "closed"})
       {:error, {:invalid_field, "shutdown", "status", "closed"}}
   """
@@ -721,9 +746,8 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
-  def validate_response_body("poke", %{} = body) do
-    validate_signal_value_cycle_body("poke", body)
-  end
+  def validate_response_body("poke", %{} = body),
+    do: validate_signal_value_cycle_body("poke", body)
 
   def validate_response_body("tick", %{} = body) do
     with :ok <- validate_required_non_empty_string("tick", body, "clock"),
@@ -733,9 +757,8 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
-  def validate_response_body("peek", %{} = body) do
-    validate_signal_value_cycle_body("peek", body)
-  end
+  def validate_response_body("peek", %{} = body),
+    do: validate_signal_value_cycle_body("peek", body)
 
   def validate_response_body("shutdown", %{"status" => "closing"} = body) do
     validate_allowed_keys("shutdown", body, ~w(status))
@@ -758,22 +781,17 @@ defmodule SvPortSim.Protocol.Command do
 
       iex> SvPortSim.Protocol.Command.validate_error_body(%{"code" => "invalid_request", "message" => "missing field", "details" => %{}, "fatal" => false})
       :ok
+
       iex> SvPortSim.Protocol.Command.validate_error_body(%{"code" => "invalid_request", "message" => "missing field"})
+      :ok
+
+      iex> SvPortSim.Protocol.Command.validate_error_body(%{"code" => "unsupported_feature", "message" => "structs are not supported", "details" => %{"feature" => "struct"}, "fatal" => false})
       :ok
   """
   @spec validate_error_body(term()) :: :ok | {:error, term()}
-  def validate_error_body(%{} = body) do
-    with :ok <- validate_required_error_code(body),
-         :ok <- validate_required_non_empty_string("error", body, "message"),
-         :ok <- validate_optional_map("error", body, "details"),
-         :ok <- validate_optional_boolean("error", body, "fatal") do
-      validate_allowed_keys("error", body, ~w(code message details fatal))
-    end
-  end
+  def validate_error_body(body), do: Protocol.validate_error_body(body)
 
-  def validate_error_body(body), do: {:error, {:invalid_error_body, body}}
-
-  defp validate_kind(%{"kind" => expected}, expected), do: :ok
+  defp validate_kind(%{"kind" => actual}, expected) when actual == expected, do: :ok
 
   defp validate_kind(%{"kind" => actual}, expected),
     do: {:error, {:invalid_kind, actual, expected}}
@@ -875,14 +893,6 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
-  defp validate_optional_boolean(command, body, field) do
-    case Map.fetch(body, field) do
-      {:ok, value} when is_boolean(value) -> :ok
-      {:ok, value} -> {:error, {:invalid_field, command, field, value}}
-      :error -> :ok
-    end
-  end
-
   defp validate_required_encoded_value(command, body, field) do
     case Map.fetch(body, field) do
       {:ok, value} -> validate_encoded_value(command, field, value)
@@ -924,13 +934,5 @@ defmodule SvPortSim.Protocol.Command do
     bits
     |> String.graphemes()
     |> Enum.all?(&(&1 in ~w(0 1 x z)))
-  end
-
-  defp validate_required_error_code(body) do
-    case Map.fetch(body, "code") do
-      {:ok, code} when code in @error_codes -> :ok
-      {:ok, code} -> {:error, {:invalid_error_code, code, @error_codes}}
-      :error -> {:error, {:missing_field, "error", "code"}}
-    end
   end
 end
