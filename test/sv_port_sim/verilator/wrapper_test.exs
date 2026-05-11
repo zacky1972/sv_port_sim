@@ -85,4 +85,67 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ ~s(#include "VCounter.h")
     assert source =~ "while (true)"
   end
+
+  describe "source/1 protocol helpers" do
+    test "generates 4-byte big-endian frame readers and writers" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert source =~ ~s(#include "VCounter.h")
+      assert source =~ "constexpr std::uint32_t kMaxPayloadSize = 1024 * 1024;"
+      assert source =~ "FrameRead read_frame()"
+      assert source =~ "std::cin.read(reinterpret_cast<char*>(header), 4);"
+      assert source =~ "static_cast<std::uint32_t>(header[0]) << 24"
+      assert source =~ "length == 0"
+      assert source =~ "length > kMaxPayloadSize"
+      assert source =~ "std::string payload(length, '\\0');"
+      assert source =~ "bool write_frame(const std::string& payload)"
+      assert source =~ "std::cout.write(reinterpret_cast<const char*>(header), 4);"
+      assert source =~ "std::cout.flush();"
+    end
+
+    test "generates strict JSON envelope parsing and response/error encoders" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert source =~ "class JsonCursor"
+      assert source =~ "bool parse_request(const std::string& payload"
+      assert source =~ ~s(field == "v")
+      assert source =~ ~s(field == "id")
+      assert source =~ ~s(field == "kind")
+      assert source =~ ~s(field == "op")
+      assert source =~ ~s(field == "body")
+      assert source =~ "trailing data after JSON envelope"
+      assert source =~ "std::string response_envelope("
+      assert source =~ "std::string error_envelope("
+      assert source =~ ~S(\"kind\":\"response\")
+      assert source =~ ~S(\"kind\":\"error\")
+      assert source =~ "response_envelope(request.id, request.op, body_json)"
+
+      assert source =~
+               "error_envelope(request.id, request.op, code, message, details_json, fatal)"
+    end
+
+    test "main loop emits exactly one frame per decoded request before continuing or stopping" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert occurrences(source, "write_frame(result.payload)") == 1
+      assert source =~ "result = dispatcher.dispatch(request);"
+      assert source =~ "if (result.stop)"
+      assert source =~ "return result.exit_code;"
+    end
+
+    test "fatal protocol errors are framed and terminate without undefined behavior" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert occurrences(source, "protocol_error_payload(request") >= 2
+      assert source =~ "FrameRead::Fatal(\"empty payload\")"
+      assert source =~ "FrameRead::Fatal(message.str())"
+      assert source =~ "write_frame(protocol_error_payload(request, frame.message));"
+      assert source =~ "write_frame(protocol_error_payload(request, parse_error));"
+      assert source =~ "return 1;"
+    end
+  end
+
+  defp occurrences(haystack, needle) do
+    length(String.split(haystack, needle)) - 1
+  end
 end
