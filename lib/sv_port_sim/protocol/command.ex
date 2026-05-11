@@ -123,6 +123,119 @@ defmodule SvPortSim.Protocol.Command do
       exit with status `0`.
     * Idempotency: terminal.
 
+  ## Example protocol exchange
+
+  The following exchange is a complete reset/poke/tick/peek sequence for a minimal Verilated
+  counter wrapper. The example top module has one clock, one active-low reset, one writable input,
+  and one readable output:
+
+      module Counter(
+        input  logic       clk,
+        input  logic       rst_n,
+        input  logic       enable,
+        output logic [3:0] count
+      );
+        always_ff @(posedge clk or negedge rst_n) begin
+          if (!rst_n) begin
+            count <= 4'd0;
+          end else if (enable) begin
+            count <= count + 4'd1;
+          end
+        end
+      endmodule
+
+  The wrapper starts at simulation cycle `0`. Each JSON value below is the exact UTF-8 payload
+  inside one protocol frame. On the actual C++ side, every payload is sent as
+  `uint32_be(byte_size(payload)) <> payload`. When Elixir opens the port with `{:packet, 4}`, it
+  sends and receives only the payload bytes because the BEAM adds and removes the 4-byte length
+  prefix.
+
+  JSON member order is not significant, but this example uses a compact stable order so C++ and
+  Elixir implementers can compare logs byte-for-byte.
+
+  ### 1. Reset
+
+  Elixir sends an 80-byte payload (`0x00000050` length prefix) requesting a two-cycle reset on
+  `rst_n`:
+
+  ```json
+  {"v":1,"id":1,"kind":"request","op":"reset","body":{"cycles":2,"reset":"rst_n"}}
+  ```
+
+  The C++ wrapper drives reset active for two clock cycles, deasserts it, settles the model, and
+  returns the resulting cycle in a 102-byte payload (`0x00000066` length prefix):
+
+  ```json
+  {"v":1,"id":1,"kind":"response","op":"reset","body":{"cycle":2,"reset":{"cycles":2,"signal":"rst_n"}}}
+  ```
+
+  ### 2. Poke
+
+  Elixir writes `enable = 1` using the canonical bit-string value encoding. The request is a
+  101-byte payload (`0x00000065` length prefix):
+
+  ```json
+  {"v":1,"id":2,"kind":"request","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1}}}
+  ```
+
+  The wrapper assigns the top-level signal, calls `eval()` to settle combinational logic, does not
+  advance the cycle counter, and echoes the stored canonical value in a 112-byte payload
+  (`0x00000070` length prefix):
+
+  ```json
+  {"v":1,"id":2,"kind":"response","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1},"cycle":2}}
+  ```
+
+  ### 3. Tick
+
+  Elixir advances one full cycle on `clk`. The request is a 77-byte payload (`0x0000004d` length
+  prefix):
+
+  ```json
+  {"v":1,"id":3,"kind":"request","op":"tick","body":{"clock":"clk","cycles":1}}
+  ```
+
+  The wrapper performs one complete clock cycle, increments its cycle counter to `3`, and returns
+  an 88-byte payload (`0x00000058` length prefix):
+
+  ```json
+  {"v":1,"id":3,"kind":"response","op":"tick","body":{"clock":"clk","cycles":1,"cycle":3}}
+  ```
+
+  ### 4. Peek
+
+  Elixir reads `count` without advancing time. The request is a 69-byte payload (`0x00000045`
+  length prefix):
+
+  ```json
+  {"v":1,"id":4,"kind":"request","op":"peek","body":{"signal":"count"}}
+  ```
+
+  Because reset put `count` at zero and the enabled tick incremented it once, the wrapper returns
+  `0001` as a 4-bit most-significant-bit-first value. The response is a 114-byte payload
+  (`0x00000072` length prefix):
+
+  ```json
+  {"v":1,"id":4,"kind":"response","op":"peek","body":{"signal":"count","value":{"bits":"0001","width":4},"cycle":3}}
+  ```
+
+  ### 5. Non-fatal error example
+
+  A well-formed command for an unknown or unreadable signal is a command-layer error, not a fatal
+  protocol failure. Elixir sends a 71-byte payload (`0x00000047` length prefix):
+
+  ```json
+  {"v":1,"id":5,"kind":"request","op":"peek","body":{"signal":"missing"}}
+  ```
+
+  The wrapper returns one `kind: "error"` envelope with the same `id` and `op`, keeps the simulator
+  process running, and accepts the next request. The response is a 146-byte payload
+  (`0x00000092` length prefix):
+
+  ```json
+  {"v":1,"id":5,"kind":"error","op":"peek","body":{"code":"invalid_signal","message":"unknown signal","details":{"signal":"missing"},"fatal":false}}
+  ```
+
   ## Examples
 
   The MVP command set is fixed and ordered for documentation and tests.

@@ -39,3 +39,8 @@ Runtime commands return `{:ok, body}` for successful wrapper responses or `{:err
 
 All runtime commands accept `timeout: timeout()`. `reset/2` also accepts `:cycles` and `:reset`; `tick/2` also accepts `:cycles` and `:clock`. `poke/4` accepts `%{bits: bits, width: width}` or `%{"bits" => bits, "width" => width}` and normalizes it to JSON-compatible string-keyed data before sending it to the wrapper.
 
+
+## Runtime protocol exchange reference
+
+For the exact framed JSON exchange used by the wrapper protocol, see the `SvPortSim.Protocol.Command` documentation. It includes a complete minimal counter sequence covering reset, poke, tick, peek, and a non-fatal command error, with the JSON payloads and 4-byte big-endian frame lengths shown explicitly.
+
