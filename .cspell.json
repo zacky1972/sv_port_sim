@@ -51,6 +51,7 @@
     "negedge",
     "pokes",
     "peeks",
-    "arities"
+    "arities",
+    "deasserts"
   ]
 }

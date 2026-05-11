@@ -86,6 +86,37 @@ defmodule SvPortSim.Protocol.CommandTest do
     assert Command.validate_error(error) == :ok
   end
 
+  test "documented reset-poke-tick-peek exchange matches the wire and command schemas" do
+    payloads = [
+      {80, ~s({"v":1,"id":1,"kind":"request","op":"reset","body":{"cycles":2,"reset":"rst_n"}})},
+      {102,
+       ~s({"v":1,"id":1,"kind":"response","op":"reset","body":{"cycle":2,"reset":{"cycles":2,"signal":"rst_n"}}})},
+      {101,
+       ~s({"v":1,"id":2,"kind":"request","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1}}})},
+      {112,
+       ~s({"v":1,"id":2,"kind":"response","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1},"cycle":2}})},
+      {77, ~s({"v":1,"id":3,"kind":"request","op":"tick","body":{"clock":"clk","cycles":1}})},
+      {88,
+       ~s({"v":1,"id":3,"kind":"response","op":"tick","body":{"clock":"clk","cycles":1,"cycle":3}})},
+      {69, ~s({"v":1,"id":4,"kind":"request","op":"peek","body":{"signal":"count"}})},
+      {114,
+       ~s({"v":1,"id":4,"kind":"response","op":"peek","body":{"signal":"count","value":{"bits":"0001","width":4},"cycle":3}})},
+      {71, ~s({"v":1,"id":5,"kind":"request","op":"peek","body":{"signal":"missing"}})},
+      {146,
+       ~s({"v":1,"id":5,"kind":"error","op":"peek","body":{"code":"invalid_signal","message":"unknown signal","details":{"signal":"missing"},"fatal":false}})}
+    ]
+
+    for {size, payload} <- payloads do
+      assert byte_size(payload) == size
+      assert {:ok, frame} = SvPortSim.Protocol.frame_payload(payload)
+      assert <<prefix::32, rest::binary>> = frame
+      assert prefix == size
+      assert rest == payload
+      assert {:ok, message} = SvPortSim.Protocol.decode_payload(payload)
+      assert Command.validate_message(message) == :ok
+    end
+  end
+
   test "unsupported commands are rejected during request construction and validation" do
     assert Command.request("step", 1) == {:error, {:unsupported_command, "step"}}
 
