@@ -1,0 +1,110 @@
+#!/usr/bin/env elixir
+
+defmodule SvPortSimPortErrorResponseFixture do
+  @version 1
+
+  def main(_argv), do: loop()
+
+  defp loop do
+    case read_frame() do
+      :eof ->
+        :ok
+
+      {:ok, payload} ->
+        payload
+        |> JSON.decode!()
+        |> handle_request()
+
+      {:error, _reason} ->
+        System.halt(2)
+    end
+  end
+
+  defp read_frame do
+    with {:ok, <<length::32>>} <- read_exact(4),
+         {:ok, payload} <- read_exact(length) do
+      {:ok, payload}
+    else
+      :eof -> :eof
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp read_exact(byte_count), do: read_exact(byte_count, [])
+
+  defp read_exact(0, chunks) do
+    {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+  end
+
+  defp read_exact(byte_count, chunks) when byte_count > 0 do
+    case :file.read(:standard_io, byte_count) do
+      {:ok, chunk} when byte_size(chunk) > 0 ->
+        read_exact(byte_count - byte_size(chunk), [chunk | chunks])
+
+      {:ok, <<>>} ->
+        {:error, :empty_read}
+
+      :eof when chunks == [] ->
+        :eof
+
+      :eof ->
+        {:error, {:short_read, byte_count}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => %{"signal" => "missing"}} = request) do
+    body = %{
+      "code" => "invalid_signal",
+      "message" => "unknown signal",
+      "details" => %{"signal" => "missing"},
+      "fatal" => false
+    }
+
+    write_response(request, "error", body)
+    loop()
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => %{"signal" => signal}} = request) do
+    body = %{
+      "signal" => signal,
+      "value" => %{"bits" => "0", "width" => 1}
+    }
+
+    write_response(request, "response", body)
+    loop()
+  end
+
+  defp handle_request(%{"op" => "stop"} = request) do
+    write_response(request, "response", %{"status" => "closing"})
+  end
+
+  defp handle_request(%{} = request) do
+    body = %{
+      "code" => "invalid_request",
+      "message" => "unsupported fixture request",
+      "details" => %{"op" => Map.get(request, "op")},
+      "fatal" => false
+    }
+
+    write_response(request, "error", body)
+    loop()
+  end
+
+  defp write_response(request, kind, body) do
+    response = %{
+      "v" => @version,
+      "id" => request["id"],
+      "kind" => kind,
+      "op" => request["op"],
+      "body" => body
+    }
+
+    payload = JSON.encode!(response)
+    :ok = :file.write(:standard_io, [<<byte_size(payload)::32>>, payload])
+  end
+end
+
+SvPortSimPortErrorResponseFixture.main(System.argv())
