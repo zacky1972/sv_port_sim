@@ -28,6 +28,22 @@
     "Verilated",
     "endmodule",
     "basenames",
-    "contextp"
+    "contextp",
+    "MVP",
+    "SystemVerilog",
+    "canonicalised",
+    "canonicalise",
+    "chandle",
+    "modports",
+    "normalised",
+    "normalises",
+    "shortreal",
+    "unpacked",
+    "normalized",
+    "normalizes",
+    "normalizing",
+    "normalise",
+    "typeish",
+    "signedness"
   ]
 }
