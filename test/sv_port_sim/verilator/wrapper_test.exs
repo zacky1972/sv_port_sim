@@ -34,33 +34,12 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ "ModelAccessors& model_"
   end
 
-  test "source/1 handles stop and shutdown as graceful terminal commands" do
-    assert {:ok, source} = Wrapper.source("Counter")
-
-    assert source =~ ~s(op == "stop" || op == "shutdown")
-    assert source =~ "model_.final();"
-    assert source =~ "result.exit_code = 0;"
-  end
-
-  test "source/1 includes fatal protocol cleanup path and EOF path" do
-    assert {:ok, source} = Wrapper.source("Counter")
-
-    assert source =~ "FrameRead::eof"
-    assert source =~ "FrameRead::fatal"
-    assert source =~ ~s("protocol_error")
-    assert source =~ "~ModelAccessors() { final(); }"
-  end
-
   test "source/1 no longer emits a one-shot eval/final main" do
     assert {:ok, source} = Wrapper.source("Counter")
 
     refute source =~ "top->eval();"
     refute source =~ "delete top;"
     refute source =~ "delete contextp;"
-  end
-
-  test "interactive_source/1 is an explicit alias for source/1" do
-    assert Wrapper.interactive_source("Counter") == Wrapper.source("Counter")
   end
 
   test "source/1 rejects invalid top module" do
@@ -84,6 +63,74 @@ defmodule SvPortSim.Verilator.WrapperTest do
     source = File.read!(path)
     assert source =~ ~s(#include "VCounter.h")
     assert source =~ "while (true)"
+  end
+
+  test "source/1 emits canonical response and error envelope helpers" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ "std::string response_envelope("
+    assert source =~ "std::string error_body_json("
+    assert source =~ "std::string error_envelope("
+    assert source =~ "DispatchResult respond(const Request& request"
+    assert source =~ "DispatchResult error_response("
+    assert source =~ ~S(\"kind\":\"response\")
+    assert source =~ ~S(\"kind\":\"error\")
+    assert source =~ ~S(\"details\":)
+    assert source =~ ~S(\"fatal\":)
+  end
+
+  test "source/1 uses structured success responses for successful commands" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ "return respond(request, body);"
+    assert source =~ ~s(op == "hello")
+    assert source =~ ~s(op == "eval")
+    assert source =~ ~s(op == "finish?")
+    assert source =~ ~s(op == "stop" || op == "shutdown")
+  end
+
+  test "source/1 returns non-fatal structured errors for unsupported commands" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ ~s("unsupported_command")
+    assert source =~ ~s("unsupported command")
+    assert source =~ "json_string_detail(\"operation\", op)"
+    assert source =~ "false);"
+  end
+
+  test "source/1 validates invalid signal names and invalid encoded values without crashing" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ "bool is_sv_identifier(const std::string& value)"
+    assert source =~ "bool validate_signal_field("
+    assert source =~ ~s("invalid_signal")
+    assert source =~ "bool validate_encoded_value("
+    assert source =~ ~s("invalid_value")
+    assert source =~ "is_runtime_bit_string(bits)"
+  end
+
+  test "source/1 handles stop and shutdown as graceful terminal commands" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ ~s(op == "stop" || op == "shutdown")
+    assert source =~ "model_.final();"
+    assert source =~ "result.exit_code = 0;"
+  end
+
+  test "source/1 includes fatal protocol cleanup path and EOF path" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    assert source =~ "FrameRead::eof"
+    assert source =~ "FrameRead::fatal"
+    assert source =~ ~s("protocol_error")
+    assert source =~ "~ModelAccessors() { final(); }"
+    assert source =~ "if (result.stop) {"
+    assert source =~ "model.final();"
+    assert source =~ "return result.exit_code;"
+  end
+
+  test "interactive_source/1 is an explicit alias for source/1" do
+    assert Wrapper.interactive_source("Counter") == Wrapper.source("Counter")
   end
 
   describe "source/1 protocol helpers" do
