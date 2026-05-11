@@ -50,6 +50,7 @@
     "posedge",
     "negedge",
     "pokes",
-    "peeks"
+    "peeks",
+    "arities"
   ]
 }
