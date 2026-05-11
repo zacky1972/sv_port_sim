@@ -52,6 +52,21 @@
     "pokes",
     "peeks",
     "arities",
-    "deasserts"
+    "deasserts",
+    "cctype",
+    "cstdint",
+    "sstream",
+    "ifdef",
+    "isspace",
+    "npos",
+    "fileno",
+    "ostringstream",
+    "setmode",
+    "isdigit",
+    "fcntl",
+    "constexpr",
+    "gcount",
+    "streamsize",
+    "cout"
   ]
 }
