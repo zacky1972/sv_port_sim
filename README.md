@@ -22,11 +22,14 @@ SvPortSim.public_functions()
 
 The default transport, `SvPortSim.Transport.Port`, opens the wrapper executable with the port framing documented by `SvPortSim.Protocol`. `:executable` is required for that default transport. Tests and alternate runtimes can provide a module implementing `SvPortSim.Transport` via the `:transport` option.
 
+Runtime commands return `{:ok, body}` for successful wrapper responses or `{:error, error_body}` for wrapper-side and Elixir-side failures. `error_body` follows the canonical shape from `SvPortSim.Protocol`, including `"code"`, `"message"`, `"details"`, and `"fatal"`. Fatal errors close the current transport and stop the instance; callers should start a new instance before retrying.
+
+All runtime commands accept `timeout: timeout()`. `reset/2` also accepts `:cycles` and `:reset`; `tick/2` also accepts `:cycles` and `:clock`. `poke/4` accepts `%{bits: bits, width: width}` or `%{"bits" => bits, "width" => width}` and normalizes it to JSON-compatible string-keyed data before sending it to the wrapper.
+
 A typical session is:
 
 ```elixir
 {:ok, sim} = SvPortSim.start_link(executable: "/path/to/VCounter")
-
 {:ok, _reset} = SvPortSim.reset(sim, cycles: 2, reset: "rst_n")
 {:ok, _poke} = SvPortSim.poke(sim, "enable", %{bits: "1", width: 1})
 {:ok, _tick} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
@@ -35,12 +38,156 @@ A typical session is:
 :ok = SvPortSim.stop(sim)
 ```
 
-Runtime commands return `{:ok, body}` for successful wrapper responses or `{:error, error_body}` for wrapper-side and Elixir-side failures. `error_body` follows the canonical shape from `SvPortSim.Protocol`, including `"code"`, `"message"`, `"details"`, and `"fatal"`. Fatal errors close the current transport and stop the instance; callers should start a new instance before retrying.
+## Runtime protocol and supported SystemVerilog subset
 
-All runtime commands accept `timeout: timeout()`. `reset/2` also accepts `:cycles` and `:reset`; `tick/2` also accepts `:cycles` and `:clock`. `poke/4` accepts `%{bits: bits, width: width}` or `%{"bits" => bits, "width" => width}` and normalizes it to JSON-compatible string-keyed data before sending it to the wrapper.
+This is the high-level user-facing runtime contract. The detailed executable specifications live in:
 
+- `SvPortSim.Protocol` for framing, envelopes, timeouts, return values, and runtime error semantics.
+- `SvPortSim.Protocol.DataType` for supported runtime value encodings.
+- `SvPortSim.SignalSpec` for top-level SystemVerilog port metadata.
 
-## Runtime protocol exchange reference
+### Runtime contract
 
-For the exact framed JSON exchange used by the wrapper protocol, see the `SvPortSim.Protocol.Command` documentation. It includes a complete minimal counter sequence covering reset, poke, tick, peek, and a non-fatal command error, with the JSON payloads and 4-byte big-endian frame lengths shown explicitly.
+One `SvPortSim` GenServer owns one simulator transport and serializes all calls to that simulator. The public Elixir API sends request envelopes to the wrapper with monotonically assigned request IDs; the wrapper must return exactly one matching `response` or `error` envelope for each request.
 
+Protocol version 1 uses a four-byte big-endian length-prefixed frame followed by one UTF-8 JSON object:
+
+```text
+frame   = uint32_be(byte_size(payload)) <> payload
+payload = UTF-8 JSON object
+```
+
+Elixir opens the wrapper port with the options returned by `SvPortSim.Protocol.port_options/0`:
+
+```elixir
+[:binary, {:packet, 4}, :exit_status]
+```
+
+With `{:packet, 4}`, the BEAM adds and strips the length prefix for Elixir. The external wrapper must read and write the four-byte big-endian length prefix explicitly.
+
+Every payload is an envelope with string keys:
+
+```json
+{
+  "v": 1,
+  "id": 0,
+  "kind": "request",
+  "op": "poke",
+  "body": {}
+}
+```
+
+Envelope fields:
+
+- `"v"` is the protocol version. The MVP version is `1`.
+- `"id"` is the request ID assigned by `SvPortSim`; responses and errors must echo it.
+- `"kind"` is `"request"`, `"response"`, or `"error"`.
+- `"op"` is the runtime operation, such as `"reset"`, `"tick"`, `"poke"`, `"peek"`, or the terminal `"shutdown"` operation used by `stop/2`.
+- `"body"` is an operation-specific JSON object.
+
+The maximum JSON payload size is 1 MiB. A zero-length payload is invalid. Elixir runtime calls default to a 5,000 ms timeout unless the instance or command overrides it with a positive integer timeout or `:infinity`.
+
+Successful wrapper responses become `{:ok, body}`. Wrapper-side errors and Elixir-side runtime failures become `{:error, error_body}` where `error_body` has this canonical shape:
+
+```json
+{
+  "code": "invalid_signal",
+  "message": "signal is not readable",
+  "details": {"signal": "enable"},
+  "fatal": false
+}
+```
+
+Non-fatal errors keep the simulator usable for the next request. Fatal errors close the current transport; callers must start a new simulator instance before retrying.
+
+### Protocol exchange example
+
+The wrapper receives and returns JSON payload bytes inside the length-prefixed frames. For example, a `poke/4` call may send this request payload:
+
+```json
+{
+  "v": 1,
+  "id": 3,
+  "kind": "request",
+  "op": "poke",
+  "body": {
+    "signal": "enable",
+    "value": {"bits": "1", "width": 1}
+  }
+}
+```
+
+The wrapper should answer with a matching response envelope:
+
+```json
+{
+  "v": 1,
+  "id": 3,
+  "kind": "response",
+  "op": "poke",
+  "body": {"signal": "enable"}
+}
+```
+
+A non-fatal wrapper error uses `kind: "error"` and the canonical error-body shape:
+
+```json
+{
+  "v": 1,
+  "id": 4,
+  "kind": "error",
+  "op": "peek",
+  "body": {
+    "code": "invalid_signal",
+    "message": "unknown signal",
+    "details": {"signal": "missing"},
+    "fatal": false
+  }
+}
+```
+
+### Supported SystemVerilog subset
+
+The MVP intentionally supports a small, explicit subset of top-level SystemVerilog ports:
+
+| Area | Supported subset |
+| --- | --- |
+| Port names | Simple SystemVerilog identifiers such as `clk`, `rst_n`, `enable`, and `count` |
+| Directions | `input`, `output`, and `inout` |
+| Base types | `bit` and `logic` |
+| Packed shape | Scalars and one-dimensional packed vectors canonicalized to `[width - 1:0]` |
+| Width | `1..4096` bits |
+| Signedness | Explicit signed or unsigned metadata for data vectors |
+| Roles | `data`, scalar `clock`, and scalar `reset` |
+| Clock metadata | `posedge` or `negedge` |
+| Reset metadata | active `high` or active `low` |
+| Runtime values | `%{"bits" => bits, "width" => width}` with bits ordered most-significant bit to least-significant bit |
+
+Two-state `bit` values may contain only `0` and `1`. Four-state `logic` values may also contain `x` and `z`. Runtime integer views are represented as two-state bit strings; unknown and high-impedance integer values are not part of the MVP.
+
+Signal metadata follows the `SvPortSim.SignalSpec` schema. A typical output vector is represented as:
+
+```elixir
+%{
+  "name" => "count",
+  "direction" => "output",
+  "type" => "logic",
+  "width" => 8,
+  "signed" => false,
+  "packed" => %{
+    "kind" => "packed_vector",
+    "dimensions" => [%{"left" => 7, "right" => 0}]
+  },
+  "role" => %{"kind" => "data"}
+}
+```
+
+Unsupported MVP features are rejected rather than guessed. Unsupported features include:
+
+- Escaped identifiers and implicit widths.
+- Unpacked arrays, dynamic arrays, associative arrays, queues, and multi-dimensional packed arrays.
+- Structs, unions, enums, classes, interfaces, modports, events, `chandle`, strings, and user-defined types.
+- `real`, `shortreal`, `realtime`, and `time` values.
+- Net strengths, drive strengths, and four-state integer values.
+- Non-canonical packed ranges, such as `[0:7]`, unless a wrapper canonicalizes them to `[width - 1:0]` before metadata/runtime exchange.
+- Vector clocks and vector resets.
