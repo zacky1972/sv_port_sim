@@ -32,6 +32,7 @@ defmodule SvPortSim.Verilator.Wrapper do
   #include <cstdint>
   #include <exception>
   #include <iostream>
+  #include <limits>
   #include <memory>
   #include <sstream>
   #include <string>
@@ -140,157 +141,446 @@ defmodule SvPortSim.Verilator.Wrapper do
     return "\"" + json_escape(value) + "\"";
   }
 
-  void skip_ws(const std::string& text, std::size_t& pos) {
-    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
-      ++pos;
-    }
-  }
+  class JsonCursor {
+   public:
+    explicit JsonCursor(const std::string& text) : text_(text), pos_(0) {}
 
-  bool find_field_value(const std::string& json, const std::string& field, std::size_t& pos) {
-    const std::string needle = json_quote(field);
-    pos = json.find(needle);
-
-    if (pos == std::string::npos) {
-      return false;
+    bool consume(char expected) {
+      skip_ws();
+      return consume_raw(expected);
     }
 
-    pos += needle.size();
-    skip_ws(json, pos);
+    bool parse_string(std::string& value) {
+      skip_ws();
 
-    if (pos >= json.size() || json[pos] != ':') {
-      return false;
-    }
-
-    ++pos;
-    skip_ws(json, pos);
-    return true;
-  }
-
-  bool extract_uint_field(const std::string& json, const std::string& field, std::uint64_t& value) {
-    std::size_t pos = 0;
-
-    if (!find_field_value(json, field, pos) || pos >= json.size() || !std::isdigit(static_cast<unsigned char>(json[pos]))) {
-      return false;
-    }
-
-    std::uint64_t parsed = 0;
-
-    while (pos < json.size() && std::isdigit(static_cast<unsigned char>(json[pos]))) {
-      const std::uint64_t digit = static_cast<std::uint64_t>(json[pos] - '0');
-      parsed = parsed * 10 + digit;
-      ++pos;
-    }
-
-    value = parsed;
-    return true;
-  }
-
-  bool extract_string_field(const std::string& json, const std::string& field, std::string& value) {
-    std::size_t pos = 0;
-
-    if (!find_field_value(json, field, pos) || pos >= json.size() || json[pos] != '"') {
-      return false;
-    }
-
-    ++pos;
-    std::ostringstream out;
-
-    while (pos < json.size()) {
-      const char ch = json[pos++];
-
-      if (ch == '"') {
-        value = out.str();
-        return true;
-      }
-
-      if (ch != '\\') {
-        out << ch;
-        continue;
-      }
-
-      if (pos >= json.size()) {
+      if (!consume_raw('"')) {
         return false;
       }
 
-      const char escaped = json[pos++];
+      std::ostringstream out;
 
-      switch (escaped) {
-        case '"':
-        case '\\':
-        case '/':
-          out << escaped;
-          break;
-        case 'b':
-          out << '\b';
-          break;
-        case 'f':
-          out << '\f';
-          break;
-        case 'n':
-          out << '\n';
-          break;
-        case 'r':
-          out << '\r';
-          break;
+      while (pos_ < text_.size()) {
+        const unsigned char ch = static_cast<unsigned char>(text_[pos_++]);
+
+        if (ch == '"') {
+          value = out.str();
+          return true;
+        }
+
+        if (ch < 0x20) {
+          return false;
+        }
+
+        if (ch != '\\') {
+          out << static_cast<char>(ch);
+          continue;
+        }
+
+        if (pos_ >= text_.size()) {
+          return false;
+        }
+
+        const char escaped = text_[pos_++];
+
+        switch (escaped) {
+          case '"':
+          case '\\':
+          case '/':
+            out << escaped;
+            break;
+          case 'b':
+            out << '\b';
+            break;
+          case 'f':
+            out << '\f';
+            break;
+          case 'n':
+            out << '\n';
+            break;
+          case 'r':
+            out << '\r';
+            break;
+          case 't':
+            out << '\t';
+            break;
+          case 'u': {
+            std::uint32_t code_point = 0;
+            if (!parse_unicode_escape(code_point)) {
+              return false;
+            }
+            out << (code_point <= 0x7f ? static_cast<char>(code_point) : '?');
+            break;
+          }
+          default:
+            return false;
+        }
+      }
+
+      return false;
+    }
+
+    bool parse_uint64(std::uint64_t& value) {
+      skip_ws();
+
+      if (pos_ >= text_.size() || !std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+        return false;
+      }
+
+      std::uint64_t parsed = 0;
+
+      if (text_[pos_] == '0') {
+        ++pos_;
+      } else {
+        while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          const std::uint64_t digit = static_cast<std::uint64_t>(text_[pos_] - '0');
+
+          if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return false;
+          }
+
+          parsed = parsed * 10 + digit;
+          ++pos_;
+        }
+      }
+
+      if (pos_ < text_.size()) {
+        const char next = text_[pos_];
+
+        if (std::isdigit(static_cast<unsigned char>(next)) || next == '.' || next == 'e' || next == 'E') {
+          return false;
+        }
+      }
+
+      value = parsed;
+      return true;
+    }
+
+    bool skip_object_value() {
+      skip_ws();
+      return pos_ < text_.size() && text_[pos_] == '{' && skip_object();
+    }
+
+    bool skip_value() {
+      skip_ws();
+
+      if (pos_ >= text_.size()) {
+        return false;
+      }
+
+      switch (text_[pos_]) {
+        case '"': {
+          std::string ignored;
+          return parse_string(ignored);
+        }
+        case '{':
+          return skip_object();
+        case '[':
+          return skip_array();
         case 't':
-          out << '\t';
-          break;
+          return consume_literal("true");
+        case 'f':
+          return consume_literal("false");
+        case 'n':
+          return consume_literal("null");
         default:
+          if (text_[pos_] == '-' || std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+            return skip_number();
+          }
+
           return false;
       }
     }
 
-    return false;
-  }
+    bool at_end() {
+      skip_ws();
+      return pos_ == text_.size();
+    }
 
-  bool has_object_field(const std::string& json, const std::string& field) {
-    std::size_t pos = 0;
-    return find_field_value(json, field, pos) && pos < json.size() && json[pos] == '{';
-  }
+   private:
+    void skip_ws() {
+      while (pos_ < text_.size() && std::isspace(static_cast<unsigned char>(text_[pos_]))) {
+        ++pos_;
+      }
+    }
+
+    bool consume_raw(char expected) {
+      if (pos_ < text_.size() && text_[pos_] == expected) {
+        ++pos_;
+        return true;
+      }
+
+      return false;
+    }
+
+    bool consume_literal(const std::string& literal) {
+      if (text_.compare(pos_, literal.size(), literal) != 0) {
+        return false;
+      }
+
+      pos_ += literal.size();
+      return true;
+    }
+
+    bool parse_unicode_escape(std::uint32_t& code_point) {
+      code_point = 0;
+
+      for (int i = 0; i < 4; ++i) {
+        if (pos_ >= text_.size() || !is_hex(static_cast<unsigned char>(text_[pos_]))) {
+          return false;
+        }
+
+        code_point = (code_point << 4) | hex_value(static_cast<unsigned char>(text_[pos_]));
+        ++pos_;
+      }
+
+      return true;
+    }
+
+    bool skip_object() {
+      if (!consume('{')) {
+        return false;
+      }
+
+      if (consume('}')) {
+        return true;
+      }
+
+      while (true) {
+        std::string key;
+
+        if (!parse_string(key) || !consume(':') || !skip_value()) {
+          return false;
+        }
+
+        if (consume('}')) {
+          return true;
+        }
+
+        if (!consume(',')) {
+          return false;
+        }
+      }
+    }
+
+    bool skip_array() {
+      if (!consume('[')) {
+        return false;
+      }
+
+      if (consume(']')) {
+        return true;
+      }
+
+      while (true) {
+        if (!skip_value()) {
+          return false;
+        }
+
+        if (consume(']')) {
+          return true;
+        }
+
+        if (!consume(',')) {
+          return false;
+        }
+      }
+    }
+
+    bool skip_number() {
+      if (pos_ < text_.size() && text_[pos_] == '-') {
+        ++pos_;
+      }
+
+      if (pos_ >= text_.size()) {
+        return false;
+      }
+
+      if (text_[pos_] == '0') {
+        ++pos_;
+      } else if (text_[pos_] >= '1' && text_[pos_] <= '9') {
+        while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          ++pos_;
+        }
+      } else {
+        return false;
+      }
+
+      if (pos_ < text_.size() && text_[pos_] == '.') {
+        ++pos_;
+
+        if (pos_ >= text_.size() || !std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          return false;
+        }
+
+        while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          ++pos_;
+        }
+      }
+
+      if (pos_ < text_.size() && (text_[pos_] == 'e' || text_[pos_] == 'E')) {
+        ++pos_;
+
+        if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) {
+          ++pos_;
+        }
+
+        if (pos_ >= text_.size() || !std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          return false;
+        }
+
+        while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          ++pos_;
+        }
+      }
+
+      return true;
+    }
+
+    bool is_hex(unsigned char ch) const {
+      return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+    }
+
+    std::uint32_t hex_value(unsigned char ch) const {
+      if (ch >= '0' && ch <= '9') {
+        return static_cast<std::uint32_t>(ch - '0');
+      }
+
+      if (ch >= 'a' && ch <= 'f') {
+        return static_cast<std::uint32_t>(10 + ch - 'a');
+      }
+
+      return static_cast<std::uint32_t>(10 + ch - 'A');
+    }
+
+    const std::string& text_;
+    std::size_t pos_;
+  };
 
   bool parse_request(const std::string& payload, Request& request, std::string& error) {
-    std::uint64_t parsed_version = 0;
-    std::uint64_t parsed_id = 0;
-    std::string parsed_kind;
-    std::string parsed_op;
+    JsonCursor json(payload);
+    bool seen_version = false;
+    bool seen_id = false;
+    bool seen_kind = false;
+    bool seen_op = false;
+    bool seen_body = false;
 
-    if (extract_uint_field(payload, "id", parsed_id)) {
-      request.id = parsed_id;
-      request.has_id = true;
+    if (!json.consume('{')) {
+      error = "payload must be a JSON object";
+      return false;
     }
 
-    if (extract_string_field(payload, "op", parsed_op)) {
-      request.op = parsed_op;
-      request.has_op = true;
-    }
-
-    if (!extract_uint_field(payload, "v", parsed_version)) {
+    if (json.consume('}')) {
       error = "missing or invalid protocol version";
       return false;
     }
 
-    if (!request.has_id) {
+    while (true) {
+      std::string field;
+
+      if (!json.parse_string(field)) {
+        error = "invalid JSON object field";
+        return false;
+      }
+
+      if (!json.consume(':')) {
+        error = "missing JSON field separator";
+        return false;
+      }
+
+      if (field == "v") {
+        std::uint64_t parsed_version = 0;
+
+        if (seen_version || !json.parse_uint64(parsed_version) || parsed_version > std::numeric_limits<std::uint32_t>::max()) {
+          error = "missing or invalid protocol version";
+          return false;
+        }
+
+        request.version = static_cast<std::uint32_t>(parsed_version);
+        seen_version = true;
+      } else if (field == "id") {
+        std::uint64_t parsed_id = 0;
+
+        if (seen_id || !json.parse_uint64(parsed_id)) {
+          error = "missing or invalid request id";
+          return false;
+        }
+
+        request.id = parsed_id;
+        request.has_id = true;
+        seen_id = true;
+      } else if (field == "kind") {
+        std::string parsed_kind;
+
+        if (seen_kind || !json.parse_string(parsed_kind) || parsed_kind.empty()) {
+          error = "missing or invalid message kind";
+          return false;
+        }
+
+        request.kind = parsed_kind;
+        seen_kind = true;
+      } else if (field == "op") {
+        std::string parsed_op;
+
+        if (seen_op || !json.parse_string(parsed_op) || parsed_op.empty()) {
+          error = "missing or invalid operation";
+          return false;
+        }
+
+        request.op = parsed_op;
+        request.has_op = true;
+        seen_op = true;
+      } else if (field == "body") {
+        if (seen_body || !json.skip_object_value()) {
+          error = "missing or invalid body object";
+          return false;
+        }
+
+        seen_body = true;
+      } else if (!json.skip_value()) {
+        error = "invalid JSON value";
+        return false;
+      }
+
+      if (json.consume('}')) {
+        break;
+      }
+
+      if (!json.consume(',')) {
+        error = "expected JSON object separator";
+        return false;
+      }
+    }
+
+    if (!json.at_end()) {
+      error = "trailing data after JSON envelope";
+      return false;
+    }
+
+    if (!seen_version) {
+      error = "missing or invalid protocol version";
+      return false;
+    }
+
+    if (!seen_id) {
       error = "missing or invalid request id";
       return false;
     }
 
-    if (!extract_string_field(payload, "kind", parsed_kind)) {
+    if (!seen_kind) {
       error = "missing or invalid message kind";
       return false;
     }
 
-    if (!request.has_op || request.op.empty()) {
+    if (!seen_op) {
       error = "missing or invalid operation";
       return false;
     }
 
-    if (!has_object_field(payload, "body")) {
+    if (!seen_body) {
       error = "missing or invalid body object";
       return false;
     }
 
-    request.version = static_cast<std::uint32_t>(parsed_version);
-    request.kind = parsed_kind;
     return true;
   }
 
