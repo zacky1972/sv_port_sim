@@ -23,7 +23,9 @@ defmodule SvPortSim.Transport.PortErrorResponseFixtureTest do
 
       send_raw_request(port, request(11, "stop", %{}))
       assert {:ok, stop_payload} = receive_raw_frame(port, @timeout)
-      assert {:ok, %{"id" => 11, "kind" => "response", "op" => "stop"}} = Protocol.decode_payload(stop_payload)
+
+      assert {:ok, %{"id" => 11, "kind" => "response", "op" => "stop"}} =
+               Protocol.decode_payload(stop_payload)
     end
 
     test "BEAM packet mode strips the fixture prefix and receives the error JSON payload" do
@@ -48,7 +50,10 @@ defmodule SvPortSim.Transport.PortErrorResponseFixtureTest do
 
       send_packet_request(port, request(22, "stop", %{}))
       assert_receive {^port, {:data, stop_payload}}, @timeout
-      assert {:ok, %{"id" => 22, "kind" => "response", "op" => "stop"}} = Protocol.decode_payload(stop_payload)
+
+      assert {:ok, %{"id" => 22, "kind" => "response", "op" => "stop"}} =
+               Protocol.decode_payload(stop_payload)
+
       assert_receive {^port, {:exit_status, 0}}, @timeout
     end
 
@@ -57,7 +62,11 @@ defmodule SvPortSim.Transport.PortErrorResponseFixtureTest do
       on_exit(fn -> PortTransport.close(state) end)
 
       assert {:ok, error_envelope, state} =
-               PortTransport.request(request(30, "peek", %{"signal" => "missing"}), state, @timeout)
+               PortTransport.request(
+                 request(30, "peek", %{"signal" => "missing"}),
+                 state,
+                 @timeout
+               )
 
       assert %{"id" => 30, "kind" => "error", "op" => "peek"} = error_envelope
       assert error_envelope["body"] == invalid_signal_error_body()
