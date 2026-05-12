@@ -73,7 +73,8 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ ~s(op == "stop" || op == "shutdown")
     assert source =~ "result.stop = true;"
     assert source =~ "result.exit_code = 0;"
-    assert source =~ ~S(\"status\":\"stopped\")
+    assert source =~ ~S|const char* status = request.op == "shutdown" ? "closing" : "stopped";|
+    assert source =~ ~S|body << "{\"status\":\"" << status|
   end
 
   test "source/1 includes EOF, fatal protocol, and malformed-request cleanup paths" do
