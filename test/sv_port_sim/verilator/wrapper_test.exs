@@ -50,10 +50,10 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ "const ClockResult tick = tick_clock(session_, clock);"
     refute source =~ "session_.advance_cycles(cycles);"
 
-    assert source =~ ~S("clock":)
-    assert source =~ ~S("cycles":)
-    assert source =~ ~S("time":)
-    assert source =~ ~S("cycle":)
+    assert source =~ ~S|body << "{\"clock\":" << json_quote(clock)|
+    assert source =~ ~S|<< ",\"cycles\":" << cycles|
+    assert source =~ ~S|<< ",\"time\":" << session_.time()|
+    assert source =~ ~S|<< ",\"cycle\":" << session_.cycle()|
   end
 
   test "source/1 finalizes through one guarded terminal cleanup path" do
