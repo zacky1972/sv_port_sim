@@ -130,7 +130,12 @@ defmodule SvPortSim.Compiler do
           |> Keyword.drop([:backend, :wrapper_dir, :signal_specs, :verilator_args])
           |> Keyword.put(:extra_args, Keyword.get(opts, :verilator_args, []))
 
-        VerilatorDocker.compile_executable(top_module, Map.values(rtl_files), wrapper_file, docker_opts)
+        VerilatorDocker.compile_executable(
+          top_module,
+          Map.values(rtl_files),
+          wrapper_file,
+          docker_opts
+        )
 
       other ->
         {:error, {:unsupported_backend, other}}

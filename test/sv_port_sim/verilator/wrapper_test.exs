@@ -156,6 +156,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
 
     assert source =~ ~s|if (signal == "count")|
     assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not writable");|
+
     assert source =~
              "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));"
 
