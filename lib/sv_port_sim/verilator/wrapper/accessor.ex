@@ -27,7 +27,9 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
           poke_cases: String.t(),
           peek_cases: String.t(),
           clock_cases: String.t(),
-          default_clock_case: String.t()
+          default_clock_case: String.t(),
+          reset_cases: String.t(),
+          default_reset_case: String.t()
         }
 
   @doc """
@@ -43,6 +45,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
          :ok <- SignalSpec.validate_many(normalized) do
       accessors = Enum.map(normalized, &accessor_spec/1)
       clocks = Enum.filter(accessors, & &1.clock?)
+      resets = Enum.filter(accessors, & &1.reset?)
 
       {:ok,
        %{
@@ -51,7 +54,9 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
          poke_cases: poke_cases(accessors),
          peek_cases: peek_cases(accessors),
          clock_cases: clock_cases(clocks),
-         default_clock_case: default_clock_case(clocks)
+         default_clock_case: default_clock_case(clocks),
+         reset_cases: reset_cases(resets),
+         default_reset_case: default_reset_case(resets)
        }}
     else
       {:error, reason} -> {:error, {:invalid_signal_specs, reason}}
@@ -78,6 +83,8 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       role_kind: role_kind,
       clock?: role_kind == "clock",
       clock_edge: Map.get(role, "edge"),
+      reset?: role_kind == "reset",
+      reset_active: Map.get(role, "active"),
       supported?: Regex.match?(@cpp_identifier, name) and width <= @max_native_accessor_width,
       readable?: direction in ["output", "inout"],
       writable?: direction in ["input", "inout"]
@@ -186,6 +193,58 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
   end
 
   defp default_clock_case(_clocks) do
+    """
+    return false;
+    """
+  end
+
+  defp reset_cases(resets) do
+    Enum.map_join(resets, "\n", &reset_case/1)
+  end
+
+  defp reset_case(%{name: name, supported?: false}) do
+    """
+    if (reset == "#{JsonLiteral.cpp_string(name)}") {
+      return invalid_reset(reset, "reset shape is not supported by generated accessors");
+    }
+    """
+  end
+
+  defp reset_case(%{name: name, writable?: false}) do
+    """
+    if (reset == "#{JsonLiteral.cpp_string(name)}") {
+      return invalid_reset(reset, "reset signal is not writable");
+    }
+    """
+  end
+
+  defp reset_case(%{name: name, field: field, reset_active: active}) do
+    active_level = if active == "low", do: 0, else: 1
+    inactive_level = if active == "low", do: 1, else: 0
+
+    """
+    if (reset == "#{JsonLiteral.cpp_string(name)}") {
+      const int active_level = #{active_level};
+      const int inactive_level = #{inactive_level};
+      const int level = active ? active_level : inactive_level;
+
+      auto top = session.top_model();
+      top->#{field} = static_cast<decltype(top->#{field})>(level);
+      session.eval();
+
+      return ok_reset(reset, active_level, inactive_level);
+    }
+    """
+  end
+
+  defp default_reset_case([%{name: name}]) do
+    """
+    reset = "#{JsonLiteral.cpp_string(name)}";
+    return true;
+    """
+  end
+
+  defp default_reset_case(_resets) do
     """
     return false;
     """

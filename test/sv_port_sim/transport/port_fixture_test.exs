@@ -16,7 +16,16 @@ defmodule SvPortSim.Transport.PortFixtureTest do
     trace = trace_path()
     {:ok, sim} = start_sim(trace)
 
-    assert {:ok, %{"cycle" => 2, "reset" => %{"cycles" => 2, "signal" => "rst_n"}}} =
+    assert {:ok,
+            %{
+              "cycle" => 2,
+              "reset" => "rst_n",
+              "clock" => "clk",
+              "cycles" => 2,
+              "active" => 0,
+              "inactive" => 1,
+              "final" => 1
+            }} =
              SvPortSim.reset(sim, cycles: 2, reset: :rst_n)
 
     assert {:ok, %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}, "cycle" => 2}} =
@@ -190,6 +199,40 @@ defmodule SvPortSim.Transport.PortFixtureTest do
 
     assert trace |> Enum.filter(&(&1["dir"] == "in")) |> Enum.map(& &1["payload"]["op"]) ==
              ["reset", "poke", "tick", "cycle", "peek", "finish?", "stop"]
+  end
+
+  test "counter can be reset, advanced, and queried in one process" do
+    trace = trace_path()
+    {:ok, sim} = start_sim(trace)
+
+    on_exit(fn ->
+      if Process.alive?(sim) do
+        SvPortSim.stop(sim)
+      end
+    end)
+
+    assert {:ok, _} = SvPortSim.poke(sim, "enable", %{bits: "1", width: 1})
+    assert {:ok, _} = SvPortSim.tick(sim, cycles: 3)
+
+    assert {:ok, %{"value" => %{"bits" => before_reset}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert before_reset != "0000"
+
+    assert {:ok, %{"reset" => "rst_n", "clock" => "clk", "cycles" => 2, "final" => 1}} =
+             SvPortSim.reset(sim, cycles: 2, reset: "rst_n", clock: "clk")
+
+    assert {:ok, %{"value" => %{"bits" => "0000"}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert {:ok, _} = SvPortSim.tick(sim, cycles: 1)
+
+    assert {:ok, %{"value" => %{"bits" => after_tick}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert after_tick != "0000"
+
+    assert :ok = SvPortSim.stop(sim)
   end
 
   defp start_sim(trace) do

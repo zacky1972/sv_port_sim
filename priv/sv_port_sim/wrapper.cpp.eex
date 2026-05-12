@@ -84,6 +84,22 @@ struct ClockResult {
   std::string clock;
 };
 
+struct ResetRequest {
+  std::uint64_t cycles = 1;
+  std::string reset;
+  std::string clock;
+  bool has_reset = false;
+  bool has_clock = false;
+};
+
+struct ResetResult {
+  bool ok = false;
+  std::string code;
+  std::string message;
+  std::string reset;
+  int active_level = 0;
+  int inactive_level = 0;
+};
 
 AccessorResult ok_accessor(const EncodedValue& value) {
   AccessorResult result;
@@ -126,6 +142,24 @@ ClockResult invalid_clock(const std::string& clock, const std::string& message) 
   result.code = "invalid_signal";
   result.message = message;
   result.clock = clock;
+  return result;
+}
+
+ResetResult ok_reset(const std::string& reset, int active_level, int inactive_level) {
+  ResetResult result;
+  result.ok = true;
+  result.reset = reset;
+  result.active_level = active_level;
+  result.inactive_level = inactive_level;
+  return result;
+}
+
+ResetResult invalid_reset(const std::string& reset, const std::string& message) {
+  ResetResult result;
+  result.ok = false;
+  result.code = "invalid_signal";
+  result.message = message;
+  result.reset = reset;
   return result;
 }
 
@@ -184,6 +218,22 @@ std::string json_quote(const std::string& value) {
 
 std::string json_detail(const std::string& key, const std::string& value) {
   return "{" + json_quote(key) + ":" + json_quote(value) + "}";
+}
+
+std::string reset_detail(const std::string& reset) {
+  if (reset.empty()) {
+    return "{}";
+  }
+
+  return json_detail("signal", reset);
+}
+
+std::string clock_detail(const std::string& clock) {
+  if (clock.empty()) {
+    return "{}";
+  }
+
+  return json_detail("clock", clock);
 }
 
 std::string clock_detail(const std::string& clock) {
@@ -866,6 +916,108 @@ bool parse_peek_body(const std::string& body_json,
   return true;
 }
 
+bool parse_reset_body(
+  const std::string& body_json,
+  ResetRequest& reset,
+  std::string& code,
+  std::string& message,
+  std::string& details_json
+) {
+  JsonCursor json(body_json);
+
+  bool seen_cycles = false;
+  bool seen_reset = false;
+  bool seen_clock = false;
+
+  if (!json.consume('{')) {
+    code = "invalid_request";
+    message = "reset body must be a JSON object";
+    details_json = "{}";
+    return false;
+  }
+
+  if (json.consume('}')) {
+    return json.at_end();
+  }
+
+  while (true) {
+    std::string field;
+
+    if (!json.parse_string(field) || !json.consume(':')) {
+      code = "invalid_request";
+      message = "invalid reset body";
+      details_json = "{}";
+      return false;
+    }
+
+    if (field == "cycles") {
+      std::uint64_t cycles = 0;
+
+      if (seen_cycles || !json.parse_uint64(cycles)) {
+        code = "invalid_value";
+        message = "invalid reset cycles";
+        details_json = json_detail("field", "cycles");
+        return false;
+      }
+
+      if (cycles == 0) {
+        code = "invalid_value";
+        message = "reset cycles must be positive";
+        details_json = json_detail("field", "cycles");
+        return false;
+      }
+
+      reset.cycles = cycles;
+      seen_cycles = true;
+    } else if (field == "reset") {
+      if (seen_reset || !json.parse_string(reset.reset) || reset.reset.empty()) {
+        code = "invalid_request";
+        message = "invalid reset signal";
+        details_json = json_detail("field", "reset");
+        return false;
+      }
+
+      reset.has_reset = true;
+      seen_reset = true;
+    } else if (field == "clock") {
+      if (seen_clock || !json.parse_string(reset.clock) || reset.clock.empty()) {
+        code = "invalid_request";
+        message = "invalid reset clock";
+        details_json = json_detail("field", "clock");
+        return false;
+      }
+
+      reset.has_clock = true;
+      seen_clock = true;
+    } else {
+      code = "invalid_request";
+      message = "unknown reset body field";
+      details_json = json_detail("field", field);
+      return false;
+    }
+
+    if (json.consume('}')) {
+      break;
+    }
+
+    if (!json.consume(',')) {
+      code = "invalid_request";
+      message = "invalid reset body";
+      details_json = "{}";
+      return false;
+    }
+  }
+
+  if (!json.at_end()) {
+    code = "invalid_request";
+    message = "trailing data after reset body";
+    details_json = "{}";
+    return false;
+  }
+
+  return true;
+}
+
 bool parse_request(const std::string& payload, Request& request, std::string& error) {
   JsonCursor json(payload);
   bool seen_version = false;
@@ -1248,6 +1400,19 @@ bool default_clock(std::string& clock) {
 <%= default_clock_case %>
 }
 
+ResetResult drive_reset_signal(
+  SimulationSession& session,
+  const std::string& reset,
+  bool active
+) {
+<%= reset_cases %>
+  return invalid_reset(reset, "unknown reset");
+}
+
+bool default_reset(std::string& reset) {
+<%= default_reset_case %>
+}
+
 class CommandDispatcher {
  public:
   explicit CommandDispatcher(SimulationSession& session) : session_(session) {}
@@ -1296,11 +1461,7 @@ class CommandDispatcher {
     }
 
     if (op == "reset") {
-      return error_response(request,
-                            "unsupported_feature",
-                            "operation requires generated reset sequencing",
-                            json_detail("operation", op),
-                            false);
+      return handle_reset(request);
     }
 
     return error_response(request,
@@ -1369,6 +1530,94 @@ class CommandDispatcher {
          << ",\"cycle\":" << session_.cycle() << "}";
 
     return respond(request, body.str());
+  }
+
+  DispatchResult handle_reset(const Request& request) {
+    ResetRequest reset_request;
+    std::string code;
+    std::string message;
+    std::string details_json;
+
+    if (!parse_reset_body(request.body_json, reset_request, code, message, details_json)) {
+      return error_response(request, code, message, details_json, false);
+    }
+
+    std::string reset = reset_request.reset;
+
+    if (!reset_request.has_reset && !default_reset(reset)) {
+      return error_response(
+        request,
+        "invalid_signal",
+        "no default reset signal is configured",
+        "{}",
+        false
+      );
+    }
+
+    std::string clock = reset_request.clock;
+
+    if (!reset_request.has_clock && !default_clock(clock)) {
+      return error_response(
+        request,
+        "invalid_signal",
+        "no default clock signal is configured",
+        "{}",
+        false
+      );
+    }
+
+    ResetResult active_result = drive_reset_signal(session_, reset, true);
+
+    if (!active_result.ok) {
+      return error_response(
+        request,
+        active_result.code,
+        active_result.message,
+        reset_detail(active_result.reset),
+        false
+      );
+    }
+
+    for (std::uint64_t index = 0; index < reset_request.cycles; ++index) {
+      ClockResult clock_result = tick_clock(session_, clock);
+
+      if (!clock_result.ok) {
+        return error_response(
+          request,
+          clock_result.code,
+          clock_result.message,
+          clock_detail(clock_result.clock),
+          false
+        );
+      }
+    }
+
+    ResetResult inactive_result = drive_reset_signal(session_, reset, false);
+
+    if (!inactive_result.ok) {
+      return error_response(
+        request,
+        inactive_result.code,
+        inactive_result.message,
+        reset_detail(inactive_result.reset),
+        false
+      );
+    }
+
+    std::ostringstream body;
+    body
+      << "{"
+      << "\"reset\":" << json_string(reset)
+      << ",\"clock\":" << json_string(clock)
+      << ",\"cycles\":" << reset_request.cycles
+      << ",\"active\":" << inactive_result.active_level
+      << ",\"inactive\":" << inactive_result.inactive_level
+      << ",\"final\":" << inactive_result.inactive_level
+      << ",\"time\":" << session_.time()
+      << ",\"cycle\":" << session_.cycle()
+      << "}";
+
+    return response(request, body.str());
   }
 
   DispatchResult handle_poke(const Request& request) {

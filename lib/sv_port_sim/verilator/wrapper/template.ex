@@ -17,6 +17,8 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
           required(:peek_cases) => String.t(),
           optional(:clock_cases) => String.t(),
           optional(:default_clock_case) => String.t(),
+          optional(:reset_cases) => String.t(),
+          optional(:default_reset_case) => String.t(),
           optional(atom()) => term()
         }
 
@@ -34,7 +36,9 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
       :poke_cases,
       :peek_cases,
       :clock_cases,
-      :default_clock_case
+      :default_clock_case,
+      :reset_cases,
+      :default_reset_case
     ],
     trim: false
   )
@@ -56,6 +60,9 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
     clock_cases = Map.get(context, :clock_cases, "")
     default_clock_case = Map.get(context, :default_clock_case, "return false;\n")
 
+    reset_cases = Map.get(context, :reset_cases, "")
+    default_reset_case = Map.get(context, :default_reset_case, "return false;\n")
+
     render_template(
       "V#{top_module}",
       JsonLiteral.cpp_string(top_module),
@@ -63,7 +70,9 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
       poke_cases,
       peek_cases,
       clock_cases,
-      default_clock_case
+      default_clock_case,
+      reset_cases,
+      default_reset_case
     )
   end
 end
