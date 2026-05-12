@@ -70,6 +70,7 @@
     "cout",
     "cstdio",
     "isalpha",
-    "isalnum"
+    "isalnum",
+    "nullptr"
   ]
 }

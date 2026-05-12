@@ -2,16 +2,10 @@ defmodule SvPortSim.Verilator.Wrapper do
   @moduledoc """
   Builds interactive C++ wrapper files for Verilated SystemVerilog top modules.
 
-  This module generates the C++ program used to instantiate a Verilator-generated
-  top-module class once, keep it alive, and drive it through the SvPortSim
-  stdin/stdout protocol loop.
-
-  The generated executable reads length-prefixed JSON requests, dispatches
-  commands, writes length-prefixed JSON responses, and exits only on `stop`,
-  `shutdown`, EOF, or a fatal protocol/wrapper failure.  The generated command
-  dispatcher is intentionally separated from the model-specific access layer.
-  `ModelAccessors` owns calls into `V`; `CommandDispatcher` owns protocol-level
-  command routing and response/error envelopes.
+  The generated executable creates one `VerilatedContext` and one
+  Verilator-generated top-module instance before entering the command loop. The
+  same simulation session is reused for every protocol request until `stop`,
+  `shutdown`, EOF, or a fatal wrapper/protocol failure terminates the process.
 
   The `top_module` argument is the SystemVerilog top-module name without
   Verilator's `V` class-name prefix. For example, `"Counter"` maps to the
@@ -30,8 +24,8 @@ defmodule SvPortSim.Verilator.Wrapper do
   #include "verilated.h"
 
   #include <cctype>
-  #include <cstdint>
   #include <cstdio>
+  #include <cstdint>
   #include <exception>
   #include <iostream>
   #include <limits>
@@ -48,7 +42,6 @@ defmodule SvPortSim.Verilator.Wrapper do
 
   constexpr std::uint32_t kProtocolVersion = 1;
   constexpr std::uint32_t kMaxPayloadSize = 1024 * 1024;
-  constexpr std::uint32_t kMaxSignalWidth = 4096;
   const char* kTopModule = "@@TOP_MODULE@@";
 
   struct Request {
@@ -107,35 +100,35 @@ defmodule SvPortSim.Verilator.Wrapper do
       const unsigned char ch = static_cast<unsigned char>(*it);
 
       switch (ch) {
-        case '"':
-          out << "\\\"";
-          break;
-        case '\\':
-          out << "\\\\";
-          break;
-        case '\b':
-          out << "\\b";
-          break;
-        case '\f':
-          out << "\\f";
-          break;
-        case '\n':
-          out << "\\n";
-          break;
-        case '\r':
-          out << "\\r";
-          break;
-        case '\t':
-          out << "\\t";
-          break;
-        default:
-          if (ch < 0x20) {
-            static const char* hex = "0123456789abcdef";
-            out << "\\u00" << hex[(ch >> 4) & 0x0f] << hex[ch & 0x0f];
-          } else {
-            out << static_cast<char>(ch);
-          }
-          break;
+      case '"':
+        out << "\\\"";
+        break;
+      case '\\':
+        out << "\\\\";
+        break;
+      case '\b':
+        out << "\\b";
+        break;
+      case '\f':
+        out << "\\f";
+        break;
+      case '\n':
+        out << "\\n";
+        break;
+      case '\r':
+        out << "\\r";
+        break;
+      case '\t':
+        out << "\\t";
+        break;
+      default:
+        if (ch < 0x20) {
+          static const char* hex = "0123456789abcdef";
+          out << "\\u00" << hex[(ch >> 4) & 0x0f] << hex[ch & 0x0f];
+        } else {
+          out << static_cast<char>(ch);
+        }
+        break;
       }
     }
 
@@ -146,21 +139,12 @@ defmodule SvPortSim.Verilator.Wrapper do
     return "\"" + json_escape(value) + "\"";
   }
 
-  std::string json_string_detail(const std::string& key, const std::string& value) {
+  std::string json_detail(const std::string& key, const std::string& value) {
     return "{" + json_quote(key) + ":" + json_quote(value) + "}";
   }
 
-  std::string json_two_string_details(
-      const std::string& key1,
-      const std::string& value1,
-      const std::string& key2,
-      const std::string& value2) {
-    return "{" + json_quote(key1) + ":" + json_quote(value1) + "," +
-           json_quote(key2) + ":" + json_quote(value2) + "}";
-  }
-
   class JsonCursor {
-   public:
+  public:
     explicit JsonCursor(const std::string& text) : text_(text), pos_(0) {}
 
     bool consume(char expected) {
@@ -201,38 +185,38 @@ defmodule SvPortSim.Verilator.Wrapper do
         const char escaped = text_[pos_++];
 
         switch (escaped) {
-          case '"':
-          case '\\':
-          case '/':
-            out << escaped;
-            break;
-          case 'b':
-            out << '\b';
-            break;
-          case 'f':
-            out << '\f';
-            break;
-          case 'n':
-            out << '\n';
-            break;
-          case 'r':
-            out << '\r';
-            break;
-          case 't':
-            out << '\t';
-            break;
-          case 'u': {
-            std::uint32_t code_point = 0;
+        case '"':
+        case '\\':
+        case '/':
+          out << escaped;
+          break;
+        case 'b':
+          out << '\b';
+          break;
+        case 'f':
+          out << '\f';
+          break;
+        case 'n':
+          out << '\n';
+          break;
+        case 'r':
+          out << '\r';
+          break;
+        case 't':
+          out << '\t';
+          break;
+        case 'u': {
+          std::uint32_t code_point = 0;
 
-            if (!parse_unicode_escape(code_point)) {
-              return false;
-            }
-
-            out << (code_point <= 0x7f ? static_cast<char>(code_point) : '?');
-            break;
-          }
-          default:
+          if (!parse_unicode_escape(code_point)) {
             return false;
+          }
+
+          out << (code_point <= 0x7f ? static_cast<char>(code_point) : '?');
+          break;
+        }
+        default:
+          return false;
         }
       }
 
@@ -251,8 +235,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       if (text_[pos_] == '0') {
         ++pos_;
       } else {
-        while (pos_ < text_.size() &&
-               std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+        while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
           const std::uint64_t digit = static_cast<std::uint64_t>(text_[pos_] - '0');
 
           if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
@@ -267,8 +250,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       if (pos_ < text_.size()) {
         const char next = text_[pos_];
 
-        if (std::isdigit(static_cast<unsigned char>(next)) || next == '.' || next == 'e' ||
-            next == 'E') {
+        if (std::isdigit(static_cast<unsigned char>(next)) || next == '.' || next == 'e' || next == 'E') {
           return false;
         }
       }
@@ -294,11 +276,6 @@ defmodule SvPortSim.Verilator.Wrapper do
       return true;
     }
 
-    bool skip_object_value() {
-      std::string ignored;
-      return capture_object_value(ignored);
-    }
-
     bool skip_value() {
       skip_ws();
 
@@ -307,26 +284,25 @@ defmodule SvPortSim.Verilator.Wrapper do
       }
 
       switch (text_[pos_]) {
-        case '"': {
-          std::string ignored;
-          return parse_string(ignored);
+      case '"': {
+        std::string ignored;
+        return parse_string(ignored);
+      }
+      case '{':
+        return skip_object();
+      case '[':
+        return skip_array();
+      case 't':
+        return consume_literal("true");
+      case 'f':
+        return consume_literal("false");
+      case 'n':
+        return consume_literal("null");
+      default:
+        if (text_[pos_] == '-' || std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
+          return skip_number();
         }
-        case '{':
-          return skip_object();
-        case '[':
-          return skip_array();
-        case 't':
-          return consume_literal("true");
-        case 'f':
-          return consume_literal("false");
-        case 'n':
-          return consume_literal("null");
-        default:
-          if (text_[pos_] == '-' || std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
-            return skip_number();
-          }
-
-          return false;
+        return false;
       }
     }
 
@@ -335,7 +311,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       return pos_ == text_.size();
     }
 
-   private:
+  private:
     void skip_ws() {
       while (pos_ < text_.size() && std::isspace(static_cast<unsigned char>(text_[pos_]))) {
         ++pos_;
@@ -476,8 +452,7 @@ defmodule SvPortSim.Verilator.Wrapper do
     }
 
     bool is_hex(unsigned char ch) const {
-      return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
-             (ch >= 'A' && ch <= 'F');
+      return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
     }
 
     std::uint32_t hex_value(unsigned char ch) const {
@@ -495,67 +470,6 @@ defmodule SvPortSim.Verilator.Wrapper do
     const std::string& text_;
     std::size_t pos_;
   };
-
-  bool find_string_field(
-      const std::string& object_json,
-      const std::string& field_name,
-      std::string& value,
-      bool& found,
-      std::string& error) {
-    found = false;
-    JsonCursor json(object_json);
-
-    if (!json.consume('{')) {
-      error = "body must be a JSON object";
-      return false;
-    }
-
-    if (json.consume('}')) {
-      return true;
-    }
-
-    while (true) {
-      std::string field;
-
-      if (!json.parse_string(field) || !json.consume(':')) {
-        error = "invalid JSON object field";
-        return false;
-      }
-
-      if (field == field_name) {
-        if (found) {
-          error = "duplicate field: " + field_name;
-          return false;
-        }
-
-        if (!json.parse_string(value)) {
-          error = "field must be a string: " + field_name;
-          return false;
-        }
-
-        found = true;
-      } else if (!json.skip_value()) {
-        error = "invalid JSON value";
-        return false;
-      }
-
-      if (json.consume('}')) {
-        break;
-      }
-
-      if (!json.consume(',')) {
-        error = "expected JSON object separator";
-        return false;
-      }
-    }
-
-    if (!json.at_end()) {
-      error = "trailing data after JSON object";
-      return false;
-    }
-
-    return true;
-  }
 
   bool find_uint_field(
       const std::string& object_json,
@@ -618,105 +532,6 @@ defmodule SvPortSim.Verilator.Wrapper do
     return true;
   }
 
-  bool find_object_field(
-      const std::string& object_json,
-      const std::string& field_name,
-      std::string& value_json,
-      bool& found,
-      std::string& error) {
-    found = false;
-    JsonCursor json(object_json);
-
-    if (!json.consume('{')) {
-      error = "body must be a JSON object";
-      return false;
-    }
-
-    if (json.consume('}')) {
-      return true;
-    }
-
-    while (true) {
-      std::string field;
-
-      if (!json.parse_string(field) || !json.consume(':')) {
-        error = "invalid JSON object field";
-        return false;
-      }
-
-      if (field == field_name) {
-        if (found) {
-          error = "duplicate field: " + field_name;
-          return false;
-        }
-
-        if (!json.capture_object_value(value_json)) {
-          error = "field must be an object: " + field_name;
-          return false;
-        }
-
-        found = true;
-      } else if (!json.skip_value()) {
-        error = "invalid JSON value";
-        return false;
-      }
-
-      if (json.consume('}')) {
-        break;
-      }
-
-      if (!json.consume(',')) {
-        error = "expected JSON object separator";
-        return false;
-      }
-    }
-
-    if (!json.at_end()) {
-      error = "trailing data after JSON object";
-      return false;
-    }
-
-    return true;
-  }
-
-  bool is_sv_identifier(const std::string& value) {
-    if (value.empty()) {
-      return false;
-    }
-
-    const unsigned char first = static_cast<unsigned char>(value[0]);
-
-    if (!(std::isalpha(first) || first == '_')) {
-      return false;
-    }
-
-    for (std::size_t i = 1; i < value.size(); ++i) {
-      const unsigned char ch = static_cast<unsigned char>(value[i]);
-
-      if (!(std::isalnum(ch) || ch == '_' || ch == '$')) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  bool is_runtime_bit_string(const std::string& bits) {
-    if (bits.empty()) {
-      return false;
-    }
-
-    for (std::string::const_iterator it = bits.begin(); it != bits.end(); ++it) {
-      const char ch = *it;
-
-      if (!(ch == '0' || ch == '1' || ch == 'x' || ch == 'z')) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   bool parse_request(const std::string& payload, Request& request, std::string& error) {
     JsonCursor json(payload);
     bool seen_version = false;
@@ -751,8 +566,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       if (field == "v") {
         std::uint64_t parsed_version = 0;
 
-        if (seen_version || !json.parse_uint64(parsed_version) ||
-            parsed_version > std::numeric_limits<std::uint32_t>::max()) {
+        if (seen_version || !json.parse_uint64(parsed_version) || parsed_version > std::numeric_limits<std::uint32_t>::max()) {
           error = "missing or invalid protocol version";
           return false;
         }
@@ -903,28 +717,14 @@ defmodule SvPortSim.Verilator.Wrapper do
     return !std::cout.fail();
   }
 
-  std::string response_envelope(
-      std::uint64_t id,
-      const std::string& op,
-      const std::string& body_json) {
+  std::string response_envelope(std::uint64_t id, const std::string& op, const std::string& body_json) {
     std::ostringstream out;
-    out << "{\"v\":" << kProtocolVersion << ",\"id\":" << id
+    out << "{\"v\":" << kProtocolVersion
+        << ",\"id\":" << id
         << ",\"kind\":\"response\""
         << ",\"op\":" << json_quote(op)
-        << ",\"body\":" << body_json << "}";
-    return out.str();
-  }
-
-  std::string error_body_json(
-      const std::string& code,
-      const std::string& message,
-      const std::string& details_json,
-      bool fatal) {
-    std::ostringstream out;
-    out << "{\"code\":" << json_quote(code)
-        << ",\"message\":" << json_quote(message)
-        << ",\"details\":" << details_json
-        << ",\"fatal\":" << (fatal ? "true" : "false") << "}";
+        << ",\"body\":" << body_json
+        << "}";
     return out.str();
   }
 
@@ -936,10 +736,16 @@ defmodule SvPortSim.Verilator.Wrapper do
       const std::string& details_json,
       bool fatal) {
     std::ostringstream out;
-    out << "{\"v\":" << kProtocolVersion << ",\"id\":" << id
+    out << "{\"v\":" << kProtocolVersion
+        << ",\"id\":" << id
         << ",\"kind\":\"error\""
         << ",\"op\":" << json_quote(op)
-        << ",\"body\":" << error_body_json(code, message, details_json, fatal) << "}";
+        << ",\"body\":{";
+    out << "\"code\":" << json_quote(code)
+        << ",\"message\":" << json_quote(message)
+        << ",\"details\":" << details_json
+        << ",\"fatal\":" << (fatal ? "true" : "false")
+        << "}}";
     return out.str();
   }
 
@@ -949,7 +755,7 @@ defmodule SvPortSim.Verilator.Wrapper do
         request.has_op ? request.op : "protocol",
         "protocol_error",
         "protocol error",
-        json_string_detail("reason", message),
+        json_detail("reason", message),
         true);
   }
 
@@ -973,14 +779,24 @@ defmodule SvPortSim.Verilator.Wrapper do
     return result;
   }
 
-  class ModelAccessors {
-   public:
-    ModelAccessors(VerilatedContext* contextp, @@VERILATED_CLASS@@* top)
-        : contextp_(contextp), top_(top), finalized_(false) {}
+  class SimulationSession {
+  public:
+    SimulationSession(int argc, char** argv)
+        : contextp_(new VerilatedContext), top_(nullptr), finalized_(false) {
+      contextp_->commandArgs(argc, argv);
+      top_.reset(new @@VERILATED_CLASS@@{contextp_.get()});
+    }
 
-    ~ModelAccessors() { final(); }
+    ~SimulationSession() { final(); }
 
     void eval() { top_->eval(); }
+
+    void advance_cycles(std::uint64_t cycles) {
+      for (std::uint64_t cycle = 0; cycle < cycles; ++cycle) {
+        contextp_->timeInc(1);
+        top_->eval();
+      }
+    }
 
     void final() {
       if (!finalized_) {
@@ -993,33 +809,28 @@ defmodule SvPortSim.Verilator.Wrapper do
 
     std::uint64_t time() const { return static_cast<std::uint64_t>(contextp_->time()); }
 
-   private:
-    VerilatedContext* contextp_;
-    @@VERILATED_CLASS@@* top_;
+  private:
+    std::unique_ptr<VerilatedContext> contextp_;
+    std::unique_ptr<@@VERILATED_CLASS@@> top_;
     bool finalized_;
   };
 
+  int finish_session(SimulationSession& session, int exit_code) {
+    session.final();
+    return exit_code;
+  }
+
   class CommandDispatcher {
-   public:
-    explicit CommandDispatcher(ModelAccessors& model) : model_(model) {}
+  public:
+    explicit CommandDispatcher(SimulationSession& session) : session_(session) {}
 
     DispatchResult dispatch(const Request& request) {
       if (request.version != kProtocolVersion) {
-        return error_response(
-            request,
-            "protocol_error",
-            "unsupported protocol version",
-            "{\"expected\":1}",
-            true);
+        return error_response(request, "protocol_error", "unsupported protocol version", "{\"expected\":1}", true);
       }
 
       if (request.kind != "request") {
-        return error_response(
-            request,
-            "protocol_error",
-            "message kind must be request",
-            json_string_detail("kind", request.kind),
-            true);
+        return error_response(request, "protocol_error", "message kind must be request", json_detail("kind", request.kind), true);
       }
 
       const std::string& op = request.op;
@@ -1032,6 +843,10 @@ defmodule SvPortSim.Verilator.Wrapper do
         return handle_eval(request);
       }
 
+      if (op == "tick" || op == "cycle") {
+        return handle_cycles(request);
+      }
+
       if (op == "finish?") {
         return handle_finish(request);
       }
@@ -1040,138 +855,93 @@ defmodule SvPortSim.Verilator.Wrapper do
         return handle_stop(request);
       }
 
-      if (op == "peek") {
-        return handle_peek(request);
-      }
-
-      if (op == "poke") {
-        return handle_poke(request);
-      }
-
-      if (op == "reset" || op == "tick" || op == "cycle") {
-        return unsupported_generated_access(request);
+      if (op == "reset" || op == "poke" || op == "peek") {
+        return error_response(
+            request,
+            "unsupported_feature",
+            "operation requires generated signal accessors",
+            json_detail("operation", op),
+            false);
       }
 
       return error_response(
           request,
           "unsupported_command",
           "unsupported command",
-          json_string_detail("operation", op),
+          json_detail("operation", op),
           false);
     }
 
-   private:
+  private:
     DispatchResult handle_hello(const Request& request) {
-      const std::string body =
-          "{\"wrapper\":\"sv_port_sim\",\"top_module\":" + json_quote(kTopModule) +
-          ",\"protocol\":1}";
-      return respond(request, body);
+      std::ostringstream body;
+      body << "{\"wrapper\":\"sv_port_sim\",\"top_module\":" << json_quote(kTopModule)
+           << ",\"protocol\":1,\"time\":" << session_.time() << "}";
+      return respond(request, body.str());
     }
 
     DispatchResult handle_eval(const Request& request) {
-      model_.eval();
+      session_.eval();
       std::ostringstream body;
-      body << "{\"time\":" << model_.time() << "}";
+      body << "{\"time\":" << session_.time() << "}";
+      return respond(request, body.str());
+    }
+
+    DispatchResult handle_cycles(const Request& request) {
+      std::uint64_t cycles = 1;
+      DispatchResult validation_error;
+
+      if (!parse_cycles(request, cycles, validation_error)) {
+        return validation_error;
+      }
+
+      session_.advance_cycles(cycles);
+
+      std::ostringstream body;
+      body << "{\"cycles\":" << cycles << ",\"time\":" << session_.time() << "}";
       return respond(request, body.str());
     }
 
     DispatchResult handle_finish(const Request& request) {
-      const std::string body =
-          std::string("{\"finished\":") + (model_.finished() ? "true" : "false") + "}";
-      return respond(request, body);
+      std::ostringstream body;
+      body << "{\"finished\":" << (session_.finished() ? "true" : "false")
+           << ",\"time\":" << session_.time() << "}";
+      return respond(request, body.str());
     }
 
     DispatchResult handle_stop(const Request& request) {
-      model_.final();
       std::ostringstream body;
-      body << "{\"status\":\"stopped\",\"time\":" << model_.time() << "}";
+      body << "{\"status\":\"stopped\",\"time\":" << session_.time() << "}";
       DispatchResult result = respond(request, body.str());
       result.stop = true;
       result.exit_code = 0;
       return result;
     }
 
-    DispatchResult handle_peek(const Request& request) {
-      std::string signal;
-      DispatchResult validation_error;
-
-      if (!validate_signal_field(request, signal, validation_error)) {
-        return validation_error;
-      }
-
-      return unsupported_generated_access_for_signal(request, signal);
-    }
-
-    DispatchResult handle_poke(const Request& request) {
-      std::string signal;
-      DispatchResult validation_error;
-
-      if (!validate_signal_field(request, signal, validation_error)) {
-        return validation_error;
-      }
-
-      std::string value_json;
-      bool value_found = false;
-      std::string parse_error;
-
-      if (!find_object_field(request.body_json, "value", value_json, value_found, parse_error)) {
-        return error_response(
-            request,
-            "invalid_value",
-            "invalid encoded value",
-            json_two_string_details("signal", signal, "reason", parse_error),
-            false);
-      }
-
-      if (!value_found) {
-        return error_response(
-            request,
-            "invalid_value",
-            "missing encoded value",
-            json_string_detail("signal", signal),
-            false);
-      }
-
-      if (!validate_encoded_value(request, signal, value_json, validation_error)) {
-        return validation_error;
-      }
-
-      return unsupported_generated_access_for_signal(request, signal);
-    }
-
-    bool validate_signal_field(
-        const Request& request,
-        std::string& signal,
-        DispatchResult& result) {
+    bool parse_cycles(const Request& request, std::uint64_t& cycles, DispatchResult& result) {
       bool found = false;
       std::string parse_error;
 
-      if (!find_string_field(request.body_json, "signal", signal, found, parse_error)) {
+      if (!find_uint_field(request.body_json, "cycles", cycles, found, parse_error)) {
         result = error_response(
             request,
-            "invalid_request",
-            "invalid request body",
-            json_string_detail("reason", parse_error),
+            "invalid_value",
+            "invalid cycle count",
+            json_detail("reason", parse_error),
             false);
         return false;
       }
 
       if (!found) {
-        result = error_response(
-            request,
-            "invalid_signal",
-            "missing signal name",
-            "{}",
-            false);
-        return false;
+        cycles = 1;
       }
 
-      if (!is_sv_identifier(signal)) {
+      if (cycles == 0) {
         result = error_response(
             request,
-            "invalid_signal",
-            "invalid signal name",
-            json_string_detail("signal", signal),
+            "invalid_value",
+            "cycle count must be positive",
+            "{\"cycles\":0}",
             false);
         return false;
       }
@@ -1179,104 +949,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       return true;
     }
 
-    bool validate_encoded_value(
-        const Request& request,
-        const std::string& signal,
-        const std::string& value_json,
-        DispatchResult& result) {
-      std::string bits;
-      bool bits_found = false;
-      std::string parse_error;
-
-      if (!find_string_field(value_json, "bits", bits, bits_found, parse_error)) {
-        result = error_response(
-            request,
-            "invalid_value",
-            "invalid encoded value bits",
-            json_two_string_details("signal", signal, "reason", parse_error),
-            false);
-        return false;
-      }
-
-      if (!bits_found) {
-        result = error_response(
-            request,
-            "invalid_value",
-            "missing encoded value bits",
-            json_string_detail("signal", signal),
-            false);
-        return false;
-      }
-
-      std::uint64_t width = 0;
-      bool width_found = false;
-
-      if (!find_uint_field(value_json, "width", width, width_found, parse_error)) {
-        result = error_response(
-            request,
-            "invalid_value",
-            "invalid encoded value width",
-            json_two_string_details("signal", signal, "reason", parse_error),
-            false);
-        return false;
-      }
-
-      if (!width_found || width == 0 || width > kMaxSignalWidth) {
-        std::ostringstream reason;
-        reason << "width must be in 1.." << kMaxSignalWidth;
-        result = error_response(
-            request,
-            "invalid_value",
-            "invalid encoded value width",
-            json_two_string_details("signal", signal, "reason", reason.str()),
-            false);
-        return false;
-      }
-
-      if (bits.size() != static_cast<std::size_t>(width)) {
-        result = error_response(
-            request,
-            "invalid_value",
-            "encoded value width does not match bits",
-            json_two_string_details("signal", signal, "bits", bits),
-            false);
-        return false;
-      }
-
-      if (!is_runtime_bit_string(bits)) {
-        result = error_response(
-            request,
-            "invalid_value",
-            "encoded value bits may only contain 0, 1, x, or z",
-            json_two_string_details("signal", signal, "bits", bits),
-            false);
-        return false;
-      }
-
-      return true;
-    }
-
-    DispatchResult unsupported_generated_access(const Request& request) {
-      return error_response(
-          request,
-          "unsupported_feature",
-          "operation requires generated signal accessors",
-          json_string_detail("operation", request.op),
-          false);
-    }
-
-    DispatchResult unsupported_generated_access_for_signal(
-        const Request& request,
-        const std::string& signal) {
-      return error_response(
-          request,
-          "unsupported_feature",
-          "operation requires generated signal accessors",
-          json_two_string_details("operation", request.op, "signal", signal),
-          false);
-    }
-
-    ModelAccessors& model_;
+    SimulationSession& session_;
   };
 
   }  // namespace
@@ -1284,26 +957,20 @@ defmodule SvPortSim.Verilator.Wrapper do
   int main(int argc, char** argv) {
     set_binary_stdio();
 
-    std::unique_ptr<VerilatedContext> contextp(new VerilatedContext);
-    contextp->commandArgs(argc, argv);
-
-    std::unique_ptr<@@VERILATED_CLASS@@> top(new @@VERILATED_CLASS@@{contextp.get()});
-    ModelAccessors model(contextp.get(), top.get());
-    CommandDispatcher dispatcher(model);
+    SimulationSession session(argc, argv);
+    CommandDispatcher dispatcher(session);
 
     while (true) {
       const FrameRead frame = read_frame();
 
       if (frame.status == FrameRead::eof) {
-        model.final();
-        return 0;
+        return finish_session(session, 0);
       }
 
       if (frame.status == FrameRead::fatal) {
         const Request request;
         write_frame(protocol_error_payload(request, frame.message));
-        model.final();
-        return 1;
+        return finish_session(session, 1);
       }
 
       Request request;
@@ -1311,8 +978,7 @@ defmodule SvPortSim.Verilator.Wrapper do
 
       if (!parse_request(frame.payload, request, parse_error)) {
         write_frame(protocol_error_payload(request, parse_error));
-        model.final();
-        return 1;
+        return finish_session(session, 1);
       }
 
       DispatchResult result;
@@ -1324,25 +990,23 @@ defmodule SvPortSim.Verilator.Wrapper do
             request,
             "wrapper_fault",
             "wrapper fault",
-            json_string_detail("reason", exception.what()),
+            json_detail("reason", exception.what()),
             true);
       } catch (...) {
         result = error_response(
             request,
             "wrapper_fault",
             "wrapper fault",
-            json_string_detail("reason", "unknown exception"),
+            json_detail("reason", "unknown exception"),
             true);
       }
 
       if (!write_frame(result.payload)) {
-        model.final();
-        return 1;
+        return finish_session(session, 1);
       }
 
       if (result.stop) {
-        model.final();
-        return result.exit_code;
+        return finish_session(session, result.exit_code);
       }
     }
   }
@@ -1353,18 +1017,18 @@ defmodule SvPortSim.Verilator.Wrapper do
   @doc """
   Returns the default C++ wrapper filename for `top_module`.
 
-  The filename is formed by appending `_wrapper.cpp` to the validated top-module
-  name.
+  The filename is formed by appending `_wrapper.cpp` to the validated
+  top-module name.
 
-  Returns `{:ok, filename}` on success. Returns
-  `{:error, {:invalid_top_module, top_module}}` when `top_module` is not a binary
-  or does not satisfy the accepted identifier format.
+  Returns `{:ok, filename}` on success.
+
+  Returns `{:error, {:invalid_top_module, top_module}}` when `top_module` is
+  not a binary or does not satisfy the accepted identifier format.
 
   ## Examples
 
       iex> SvPortSim.Verilator.Wrapper.filename("Counter")
       {:ok, "Counter_wrapper.cpp"}
-
       iex> SvPortSim.Verilator.Wrapper.filename("../Counter")
       {:error, {:invalid_top_module, "../Counter"}}
 
@@ -1383,15 +1047,17 @@ defmodule SvPortSim.Verilator.Wrapper do
   @doc """
   Generates the interactive C++ wrapper source for `top_module`.
 
-  The generated source includes the Verilator-generated header `"V.h"` and
-  `verilated.h`. Its `main` function creates a `VerilatedContext`, passes
-  command-line arguments to it, instantiates `V`, enters a frame-based
-  stdin/stdout request loop, and finalizes the model on `stop`, `shutdown`, EOF,
-  or fatal wrapper/protocol failure.
+  The generated source includes the Verilator-generated header
+  `"V<top_module>.h"` and `verilated.h`. Its `main` function creates one
+  `VerilatedContext`, one `V<top_module>` instance, and one command dispatcher
+  before entering the request loop. `eval`, `tick`, and `cycle` use the same
+  session state, and terminal paths finalize the model through one guarded
+  cleanup helper.
 
-  Returns `{:ok, source}` on success. Returns
-  `{:error, {:invalid_top_module, top_module}}` when `top_module` is not a binary
-  or does not satisfy the accepted identifier format.
+  Returns `{:ok, source}` on success.
+
+  Returns `{:error, {:invalid_top_module, top_module}}` when `top_module` is
+  not a binary or does not satisfy the accepted identifier format.
 
   ## Examples
 
@@ -1400,7 +1066,7 @@ defmodule SvPortSim.Verilator.Wrapper do
       true
       iex> source =~ "while (true)"
       true
-      iex> source =~ ~s(op == "stop" || op == "shutdown")
+      iex> source =~ ~s(op == "tick" || op == "cycle")
       true
 
   """
@@ -1421,7 +1087,7 @@ defmodule SvPortSim.Verilator.Wrapper do
   ## Examples
 
       iex> {:ok, source} = SvPortSim.Verilator.Wrapper.interactive_source("Counter")
-      iex> source =~ "CommandDispatcher"
+      iex> source =~ "SimulationSession"
       true
 
   """
@@ -1431,21 +1097,21 @@ defmodule SvPortSim.Verilator.Wrapper do
   @doc """
   Writes the generated interactive C++ wrapper source for `top_module` into `dir`.
 
-  The output file is named with `filename/1` and placed directly under `dir`. The
-  directory is created if it does not already exist.
+  The output file is named with `filename/1` and placed directly under `dir`.
+  The directory is created if it does not already exist. If the destination file
+  already exists, it is overwritten.
 
-  If the destination file already exists, it is overwritten. Returns `{:ok, path}`
-  on success.
+  Returns `{:ok, path}` on success.
 
   Returns one of the following error tuples:
 
-    * `{:error, {:invalid_arguments, top_module, dir}}` when either argument is
-      not a binary
-    * `{:error, {:invalid_top_module, top_module}}` when `top_module` is a binary
-      but does not satisfy the accepted identifier format
-    * `{:error, {:mkdir_failed, dir, reason}}` when creating `dir` fails
-    * `{:error, {:write_failed, path, reason}}` when writing the wrapper source
-      fails
+  * `{:error, {:invalid_arguments, top_module, dir}}` when either argument is
+    not a binary
+  * `{:error, {:invalid_top_module, top_module}}` when `top_module` is a
+    binary but does not satisfy the accepted identifier format
+  * `{:error, {:mkdir_failed, dir, reason}}` when creating `dir` fails
+  * `{:error, {:write_failed, path, reason}}` when writing the wrapper source
+    fails
 
   ## Example
 
