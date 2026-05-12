@@ -7,6 +7,8 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
   `SvPortSim.Verilator.Wrapper.Accessor.context/1`.
   """
 
+  alias SvPortSim.Verilator.Wrapper.JsonLiteral
+
   @type context :: %{
           required(:signal_specs_json) => String.t(),
           required(:poke_cases) => String.t(),
@@ -1434,18 +1436,9 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
 
     @wrapper_template
     |> String.replace("@@VERILATED_CLASS@@", verilated_class)
-    |> String.replace("@@TOP_MODULE@@", cpp_string(top_module))
+    |> String.replace("@@TOP_MODULE@@", JsonLiteral.cpp_string(top_module))
     |> String.replace("@@SIGNAL_SPECS_JSON@@", signal_specs_json)
     |> String.replace("@@POKE_CASES@@", poke_cases)
     |> String.replace("@@PEEK_CASES@@", peek_cases)
-  end
-
-  defp cpp_string(value) do
-    value
-    |> String.replace("\\", "\\\\")
-    |> String.replace("\"", "\\\"")
-    |> String.replace("\n", "\\n")
-    |> String.replace("\r", "\\r")
-    |> String.replace("\t", "\\t")
   end
 end
