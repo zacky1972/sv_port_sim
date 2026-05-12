@@ -31,6 +31,14 @@ defmodule SvPortSim.Protocol do
   4-byte length prefix on writes and strips it on reads. The C++ wrapper must read and write
   the 4-byte big-endian length prefix explicitly.
 
+  Wrapper stdin/stdout is a byte stream, not a text stream. Wrapper implementations must
+  preserve every byte of the length prefix and payload and must not route framed output
+  through text or Unicode-transcoding APIs. For example, an Elixir fixture should open
+  `/dev/stdin` and `/dev/stdout` with `:raw` and `:binary` and use `:file.read/2` and
+  `:file.write/2` for frames. If a prefix byte such as `0x93` becomes the UTF-8 byte
+  sequence `0xC2 0x93`, `{:packet, 4}` decodes the wrong payload length and the request
+  times out.
+
   ## Limits
 
   The maximum JSON payload size is 1 MiB. A zero-length payload is invalid. A payload larger
