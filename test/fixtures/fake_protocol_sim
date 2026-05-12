@@ -1,0 +1,306 @@
+#!/usr/bin/env elixir
+
+defmodule SvPortSimFakeProtocolSim do
+  @version 1
+  @counter_width 4
+  @counter_modulus 16
+
+  def main(argv) do
+    opts = parse_args(argv)
+
+    with {:ok, input} <- :file.open(~c'/dev/stdin', [:read, :raw, :binary]),
+         {:ok, output} <- :file.open(~c'/dev/stdout', [:write, :raw, :binary]) do
+      opts
+      |> initial_state(input, output)
+      |> loop()
+    else
+      {:error, _reason} -> System.halt(2)
+    end
+  end
+
+  defp parse_args(argv), do: parse_args(argv, %{trace: nil})
+
+  defp parse_args([], opts), do: opts
+  defp parse_args(["--trace", path | rest], opts), do: parse_args(rest, %{opts | trace: path})
+  defp parse_args([_unknown | rest], opts), do: parse_args(rest, opts)
+
+  defp initial_state(opts, input, output) do
+    %{
+      cycle: 0,
+      signals: %{"count" => encoded_counter(0)},
+      trace: opts.trace,
+      input: input,
+      output: output
+    }
+  end
+
+  defp loop(state) do
+    case read_frame(state.input) do
+      :eof ->
+        :ok
+
+      {:error, reason} ->
+        trace(state, "in", 0, "", {:error, reason})
+        System.halt(2)
+
+      {:ok, length, payload} ->
+        decoded = decode_payload(payload)
+        trace(state, "in", length, payload, decoded)
+
+        case decoded do
+          {:ok, request} -> handle_request(request, state)
+          {:error, _reason} -> System.halt(2)
+        end
+    end
+  end
+
+  defp read_frame(input) do
+    case read_exact(input, 4) do
+      :eof ->
+        :eof
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, <<length::32>>} ->
+        case read_exact(input, length) do
+          {:ok, payload} -> {:ok, length, payload}
+          :eof -> {:error, :unexpected_eof}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp read_exact(input, byte_count), do: read_exact(input, byte_count, [])
+
+  defp read_exact(_input, 0, chunks) do
+    {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+  end
+
+  defp read_exact(input, byte_count, chunks) when byte_count > 0 do
+    case :file.read(input, byte_count) do
+      {:ok, chunk} when byte_size(chunk) > 0 ->
+        read_exact(input, byte_count - byte_size(chunk), [chunk | chunks])
+
+      {:ok, <<>>} ->
+        {:error, :empty_read}
+
+      :eof when chunks == [] ->
+        :eof
+
+      :eof ->
+        {:error, {:short_read, byte_count}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp decode_payload(payload) do
+    case JSON.decode(payload) do
+      {:ok, %{} = decoded} -> {:ok, decoded}
+      {:ok, decoded} -> {:error, {:invalid_payload, decoded}}
+      {:error, reason} -> {:error, {:json_decode_failed, reason}}
+    end
+  end
+
+  defp handle_request(%{"op" => "metadata"} = request, state) do
+    body = %{
+      "top" => "FakeProtocolSim",
+      "signals" => [],
+      "cycle" => state.cycle,
+      "protocol" => %{"v" => @version}
+    }
+
+    write_response(request, "response", body, state)
+  end
+
+  defp handle_request(%{"op" => "reset", "body" => body} = request, state) do
+    cycles = positive_integer(Map.get(body, "cycles"), 1)
+    signal = Map.get(body, "reset")
+
+    reset =
+      if is_binary(signal) do
+        %{"cycles" => cycles, "signal" => signal}
+      else
+        %{"cycles" => cycles}
+      end
+
+    state = %{state | cycle: state.cycle + cycles, signals: %{"count" => encoded_counter(0)}}
+    write_response(request, "response", %{"cycle" => state.cycle, "reset" => reset}, state)
+  end
+
+  defp handle_request(%{"op" => "poke", "body" => body} = request, state) do
+    signal = Map.get(body, "signal")
+    value = Map.get(body, "value")
+    state = put_in(state.signals[signal], value)
+
+    body = %{"signal" => signal, "value" => value, "cycle" => state.cycle}
+    write_response(request, "response", body, state)
+  end
+
+  defp handle_request(%{"op" => op, "body" => body} = request, state) when op in ["tick", "cycle"] do
+    cycles = positive_integer(Map.get(body, "cycles"), 1)
+    clock = Map.get(body, "clock", "clk")
+    state = tick_state(state, cycles)
+
+    response_body =
+      if op == "tick" do
+        %{"clock" => clock, "cycles" => cycles, "cycle" => state.cycle}
+      else
+        %{"cycles" => cycles, "cycle" => state.cycle}
+      end
+
+    write_response(request, "response", response_body, state)
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => %{"signal" => "missing"}} = request, state) do
+    write_error(request, "invalid_signal", "unknown signal", %{"signal" => "missing"}, state)
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => %{"signal" => "fatal"}} = request, state) do
+    write_error(
+      request,
+      "wrapper_fault",
+      "simulated fatal fixture failure",
+      %{"signal" => "fatal"},
+      state,
+      fatal: true
+    )
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => %{"signal" => "malformed"}} = _request, state) do
+    write_malformed(state)
+  end
+
+  defp handle_request(%{"op" => "peek", "body" => body} = request, state) do
+    signal = Map.get(body, "signal")
+    value = Map.get(state.signals, signal, encoded_counter(0))
+    body = %{"signal" => signal, "value" => value, "cycle" => state.cycle}
+
+    write_response(request, "response", body, state)
+  end
+
+  defp handle_request(%{"op" => "finish?"} = request, state) do
+    write_response(request, "response", %{"finished" => false, "cycle" => state.cycle}, state)
+  end
+
+  defp handle_request(%{"op" => op} = request, state) when op in ["shutdown", "stop"] do
+    write_response(request, "response", %{"status" => "closing"}, state, :halt)
+  end
+
+  defp handle_request(%{"op" => op} = request, state) do
+    write_error(request, "unsupported_command", "unsupported command", %{"op" => op}, state)
+  end
+
+  defp handle_request(request, state) do
+    id = Map.get(request, "id", 0)
+    op = Map.get(request, "op", "unknown")
+
+    request = %{
+      "v" => @version,
+      "id" => id,
+      "kind" => "request",
+      "op" => op,
+      "body" => %{}
+    }
+
+    write_error(request, "invalid_request", "invalid request envelope", %{}, state)
+  end
+
+  defp tick_state(state, cycles) do
+    enable = get_in(state.signals, ["enable", "bits"]) == "1"
+    count = state.signals |> Map.get("count", encoded_counter(0)) |> Map.fetch!("bits") |> String.to_integer(2)
+    count = if enable, do: rem(count + cycles, @counter_modulus), else: count
+
+    %{state | cycle: state.cycle + cycles, signals: Map.put(state.signals, "count", encoded_counter(count))}
+  end
+
+  defp write_response(request, kind, body, state, action \\ :continue) do
+    response = %{
+      "v" => @version,
+      "id" => request["id"],
+      "kind" => kind,
+      "op" => request["op"],
+      "body" => body
+    }
+
+    write_payload(response, state)
+
+    case action do
+      :continue -> loop(state)
+      :halt -> :ok
+    end
+  end
+
+  defp write_error(request, code, message, details, state, opts \\ []) do
+    body = %{
+      "code" => code,
+      "message" => message,
+      "details" => details,
+      "fatal" => Keyword.get(opts, :fatal, fatal_code?(code))
+    }
+
+    write_response(request, "error", body, state)
+  end
+
+  defp write_payload(message, state) do
+    payload = JSON.encode!(message)
+    length = byte_size(payload)
+
+    trace(state, "out", length, payload, {:ok, message})
+    write_frame(state.output, length, payload)
+  end
+
+  defp write_malformed(state) do
+    payload = "{"
+    length = byte_size(payload)
+
+    trace(state, "out", length, payload, {:error, :malformed_fixture_payload})
+    write_frame(state.output, length, payload)
+    loop(state)
+  end
+
+  defp write_frame(output, length, payload) do
+    :ok = :file.write(output, [<<length::32>>, payload])
+  end
+
+  defp trace(%{trace: nil}, _direction, _length, _payload, _decoded), do: :ok
+
+  defp trace(%{trace: path}, direction, length, payload, decoded) do
+    decoded_fields =
+      case decoded do
+        {:ok, value} -> %{"payload" => value}
+        {:error, reason} -> %{"decode_error" => inspect(reason)}
+      end
+
+    record =
+      Map.merge(
+        %{
+          "dir" => direction,
+          "length" => length,
+          "prefix_hex" => Base.encode16(<<length::32>>, case: :lower),
+          "payload_text" => payload
+        },
+        decoded_fields
+      )
+
+    File.write!(path, JSON.encode!(record) <> "\n", [:append])
+  end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive_integer(_value, default), do: default
+
+  defp encoded_counter(value) do
+    bits =
+      value
+      |> Integer.to_string(2)
+      |> String.pad_leading(@counter_width, "0")
+
+    %{"bits" => bits, "width" => @counter_width}
+  end
+
+  defp fatal_code?(code), do: code in ~w(protocol_error timeout malformed_output simulator_exit simulator_failure port_closed wrapper_fault)
+end
+
+SvPortSimFakeProtocolSim.main(System.argv())
