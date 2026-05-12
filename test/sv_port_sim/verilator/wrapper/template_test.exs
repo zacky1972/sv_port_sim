@@ -6,6 +6,64 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
   alias SvPortSim.Verilator.Wrapper.Accessor
   alias SvPortSim.Verilator.Wrapper.Template
 
+  @template_path Path.expand("../../../../priv/sv_port_sim/wrapper.cpp.eex", __DIR__)
+  @template_module_path Path.expand(
+                          "../../../../lib/sv_port_sim/verilator/wrapper/template.ex",
+                          __DIR__
+                        )
+
+  test "wrapper template is stored under priv as EEx" do
+    source = File.read!(@template_path)
+
+    assert source =~ "<%= verilated_class %>"
+    assert source =~ "<%= top_module %>"
+    assert source =~ "<%= signal_specs_json %>"
+    assert source =~ "<%= poke_cases %>"
+    assert source =~ "<%= peek_cases %>"
+
+    refute String.contains?(source, old_placeholder("VERILATED_CLASS"))
+    refute String.contains?(source, old_placeholder("TOP_MODULE"))
+    refute String.contains?(source, old_placeholder("SIGNAL_SPECS_JSON"))
+    refute String.contains?(source, old_placeholder("POKE_CASES"))
+    refute String.contains?(source, old_placeholder("PEEK_CASES"))
+  end
+
+  test "Template module renders from an external resource" do
+    source = File.read!(@template_module_path)
+
+    assert source =~ "@external_resource"
+    assert source =~ "EEx.function_from_file"
+    refute source =~ "@wrapper_template"
+  end
+
+  test "clock-aware template context is generated and rendered for tick and cycle" do
+    specs = [
+      SignalSpec.clock("clk"),
+      SignalSpec.clock("clk_n", edge: "negedge")
+    ]
+
+    assert {:ok, generated_context} = Accessor.context(specs)
+    assert Map.has_key?(generated_context, :clock_cases)
+    assert Map.has_key?(generated_context, :default_clock_case)
+    assert generated_context.clock_cases =~ ~s(clock == "clk")
+    assert generated_context.clock_cases =~ ~s(clock == "clk_n")
+
+    template_context = %{
+      signal_specs_json: "[]",
+      poke_cases: "",
+      peek_cases: "",
+      clock_cases: ~S(// fixture clock dispatch),
+      default_clock_case: ~S(// fixture default clock dispatch)
+    }
+
+    source = Template.render("Counter", template_context)
+
+    assert source =~ "// fixture clock dispatch"
+    assert source =~ "// fixture default clock dispatch"
+    refute source =~ "@@CLOCK_CASES@@"
+    refute source =~ "@@DEFAULT_CLOCK_CASE@@"
+  end
+
   describe "render/2" do
     test "matches Wrapper.source/1 for an empty accessor context" do
       assert {:ok, context} = Accessor.context([])
@@ -173,4 +231,6 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
     |> String.replace(~r/\s*(==|=|->|::|<|>)\s*/, "\\1")
     |> String.trim()
   end
+
+  defp old_placeholder(name), do: "@" <> "@" <> name <> "@" <> "@"
 end

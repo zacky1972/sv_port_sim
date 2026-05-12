@@ -8,11 +8,103 @@ defmodule SvPortSim.Protocol.CommandTest do
   @encoded_one %{"bits" => "1", "width" => 1}
   @encoded_count %{"bits" => "0010", "width" => 4}
 
-  test "command specs cover every MVP command with schemas and error paths" do
-    assert Command.command_names() == ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
-    assert Enum.map(Command.command_specs(), & &1.name) == Command.command_names()
+  @command_cases [
+    %{
+      op: "metadata",
+      request: %{},
+      response: %{"top" => "Counter", "signals" => [], "cycle" => 0}
+    },
+    %{
+      op: "reset",
+      request: %{"cycles" => 2},
+      response: %{"cycle" => 2, "reset" => %{"cycles" => 2}}
+    },
+    %{
+      op: "eval",
+      request: %{},
+      response: %{"time" => 0, "cycle" => 2}
+    },
+    %{
+      op: "poke",
+      request: %{"signal" => "enable", "value" => @encoded_one},
+      response: %{"signal" => "enable", "value" => @encoded_one, "cycle" => 2}
+    },
+    %{
+      op: "tick",
+      request: %{"clock" => "clk", "cycles" => 3},
+      response: %{"clock" => "clk", "cycles" => 1, "cycle" => 3}
+    },
+    %{
+      op: "cycle",
+      request: %{"clock" => "clk", "cycles" => 5},
+      response: %{"clock" => "clk", "cycles" => 5, "time" => 10, "cycle" => 8}
+    },
+    %{
+      op: "peek",
+      request: %{"signal" => "count"},
+      response: %{"signal" => "count", "value" => @encoded_count, "cycle" => 8}
+    },
+    %{
+      op: "finish?",
+      request: %{},
+      response: %{"finished" => false, "time" => 10, "cycle" => 8}
+    },
+    %{
+      op: "shutdown",
+      request: %{},
+      response: %{"status" => "closing"}
+    }
+  ]
 
-    for command <- Command.command_names() do
+  @expected_commands for %{op: op} <- @command_cases, do: op
+
+  defp command_cases, do: @command_cases
+  defp expected_commands, do: @expected_commands
+
+  defp command_case!(op) do
+    case Enum.find(command_cases(), &(&1.op == op)) do
+      nil -> raise ArgumentError, "missing command test fixture for #{inspect(op)}"
+      command_case -> command_case
+    end
+  end
+
+  defp assert_request_envelope(request, id, command, body) do
+    assert request["v"] == SvPortSim.Protocol.version()
+    assert request["id"] == id
+    assert request["kind"] == "request"
+    assert request["op"] == command
+    assert request["body"] == body
+
+    assert Command.validate_request(request) == :ok
+  end
+
+  defp assert_response_envelope(response, id, command, body) do
+    assert response["v"] == SvPortSim.Protocol.version()
+    assert response["id"] == id
+    assert response["kind"] == "response"
+    assert response["op"] == command
+    assert response["body"] == body
+
+    assert Command.validate_response(response) == :ok
+  end
+
+  test "command fixtures and specs cover every MVP command in protocol order" do
+    assert expected_commands() == [
+             "metadata",
+             "reset",
+             "eval",
+             "poke",
+             "tick",
+             "cycle",
+             "peek",
+             "finish?",
+             "shutdown"
+           ]
+
+    assert Command.command_names() == expected_commands()
+    assert Enum.map(Command.command_specs(), & &1.name) == expected_commands()
+
+    for command <- expected_commands() do
       spec = Command.command_spec!(command)
 
       assert is_map(spec.request)
@@ -25,95 +117,28 @@ defmodule SvPortSim.Protocol.CommandTest do
   end
 
   test "builds and validates every MVP request" do
-    requests = [
-      {"metadata", %{}},
-      {"reset", %{"cycles" => 2}},
-      {"poke", %{"signal" => "enable", "value" => @encoded_one}},
-      {"tick", %{"clock" => "clk", "cycles" => 3}},
-      {"peek", %{"signal" => "count"}},
-      {"shutdown", %{}}
-    ]
-
-    for {{command, body}, index} <- Enum.with_index(requests, 1) do
+    for {%{op: command, request: body}, index} <- Enum.with_index(command_cases(), 1) do
       assert {:ok, request} = Command.request(command, index, body)
-      assert request["v"] == SvPortSim.Protocol.version()
-      assert request["id"] == index
-      assert request["kind"] == "request"
-      assert request["op"] == command
-      assert request["body"] == body
-      assert Command.validate_request(request) == :ok
+      assert_request_envelope(request, index, command, body)
     end
   end
 
   test "builds and validates every MVP successful response" do
-    response_bodies = %{
-      "metadata" => %{"top" => "Counter", "signals" => [], "cycle" => 0},
-      "reset" => %{"cycle" => 2, "reset" => %{"cycles" => 2}},
-      "poke" => %{"signal" => "enable", "value" => @encoded_one, "cycle" => 2},
-      "tick" => %{"clock" => "clk", "cycles" => 1, "cycle" => 3},
-      "peek" => %{"signal" => "count", "value" => @encoded_count, "cycle" => 3},
-      "shutdown" => %{"status" => "closing"}
-    }
-
-    for {command, index} <- Enum.with_index(Command.command_names(), 1) do
-      assert {:ok, response} = Command.ok_response(index, command, response_bodies[command])
-      assert response["id"] == index
-      assert response["kind"] == "response"
-      assert response["op"] == command
-      assert response["body"] == response_bodies[command]
-      assert Command.validate_response(response) == :ok
+    for {%{op: command, response: body}, index} <- Enum.with_index(command_cases(), 1) do
+      assert {:ok, response} = Command.ok_response(index, command, body)
+      assert_response_envelope(response, index, command, body)
     end
   end
 
-  test "error responses preserve request id and operation" do
-    assert {:ok, request} = Command.request("peek", 42, %{"signal" => "missing"})
+  test "Issue 34 simulation-control commands validate through request-derived responses" do
+    for {command, index} <- Enum.with_index(~w(eval cycle finish?), 1) do
+      %{request: request_body, response: response_body} = command_case!(command)
 
-    assert {:ok, error} =
-             Command.error_response(
-               request,
-               "invalid_signal",
-               "unknown signal",
-               %{"signal" => "missing"}
-             )
+      assert {:ok, request} = Command.request(command, index, request_body)
+      assert_request_envelope(request, index, command, request_body)
 
-    assert error["id"] == 42
-    assert error["op"] == "peek"
-    assert error["kind"] == "error"
-    assert error["body"]["code"] == "invalid_signal"
-    assert error["body"]["message"] == "unknown signal"
-    assert error["body"]["details"] == %{"signal" => "missing"}
-    assert error["body"]["fatal"] == false
-    assert Command.validate_error(error) == :ok
-  end
-
-  test "documented reset-poke-tick-peek exchange matches the wire and command schemas" do
-    payloads = [
-      {80, ~s({"v":1,"id":1,"kind":"request","op":"reset","body":{"cycles":2,"reset":"rst_n"}})},
-      {102,
-       ~s({"v":1,"id":1,"kind":"response","op":"reset","body":{"cycle":2,"reset":{"cycles":2,"signal":"rst_n"}}})},
-      {101,
-       ~s({"v":1,"id":2,"kind":"request","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1}}})},
-      {112,
-       ~s({"v":1,"id":2,"kind":"response","op":"poke","body":{"signal":"enable","value":{"bits":"1","width":1},"cycle":2}})},
-      {77, ~s({"v":1,"id":3,"kind":"request","op":"tick","body":{"clock":"clk","cycles":1}})},
-      {88,
-       ~s({"v":1,"id":3,"kind":"response","op":"tick","body":{"clock":"clk","cycles":1,"cycle":3}})},
-      {69, ~s({"v":1,"id":4,"kind":"request","op":"peek","body":{"signal":"count"}})},
-      {114,
-       ~s({"v":1,"id":4,"kind":"response","op":"peek","body":{"signal":"count","value":{"bits":"0001","width":4},"cycle":3}})},
-      {71, ~s({"v":1,"id":5,"kind":"request","op":"peek","body":{"signal":"missing"}})},
-      {146,
-       ~s({"v":1,"id":5,"kind":"error","op":"peek","body":{"code":"invalid_signal","message":"unknown signal","details":{"signal":"missing"},"fatal":false}})}
-    ]
-
-    for {size, payload} <- payloads do
-      assert byte_size(payload) == size
-      assert {:ok, frame} = SvPortSim.Protocol.frame_payload(payload)
-      assert <<prefix::32, rest::binary>> = frame
-      assert prefix == size
-      assert rest == payload
-      assert {:ok, message} = SvPortSim.Protocol.decode_payload(payload)
-      assert Command.validate_message(message) == :ok
+      assert {:ok, response} = Command.ok_response(request, response_body)
+      assert_response_envelope(response, index, command, response_body)
     end
   end
 

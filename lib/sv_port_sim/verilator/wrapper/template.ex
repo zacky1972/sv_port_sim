@@ -15,6 +15,8 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
           required(:signal_specs_json) => String.t(),
           required(:poke_cases) => String.t(),
           required(:peek_cases) => String.t(),
+          optional(:clock_cases) => String.t(),
+          optional(:default_clock_case) => String.t(),
           optional(atom()) => term()
         }
 
@@ -25,7 +27,15 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
     :defp,
     :render_template,
     @template_path,
-    [:verilated_class, :top_module, :signal_specs_json, :poke_cases, :peek_cases],
+    [
+      :verilated_class,
+      :top_module,
+      :signal_specs_json,
+      :poke_cases,
+      :peek_cases,
+      :clock_cases,
+      :default_clock_case
+    ],
     trim: false
   )
 
@@ -33,19 +43,27 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
   Renders wrapper C++ source for `top_module` using prebuilt accessor context.
   """
   @spec render(String.t(), context()) :: String.t()
-  def render(top_module, %{
-        signal_specs_json: signal_specs_json,
-        poke_cases: poke_cases,
-        peek_cases: peek_cases
-      })
+  def render(
+        top_module,
+        %{
+          signal_specs_json: signal_specs_json,
+          poke_cases: poke_cases,
+          peek_cases: peek_cases
+        } = context
+      )
       when is_binary(top_module) and is_binary(signal_specs_json) and is_binary(poke_cases) and
              is_binary(peek_cases) do
+    clock_cases = Map.get(context, :clock_cases, "")
+    default_clock_case = Map.get(context, :default_clock_case, "return false;\n")
+
     render_template(
       "V#{top_module}",
       JsonLiteral.cpp_string(top_module),
       signal_specs_json,
       poke_cases,
-      peek_cases
+      peek_cases,
+      clock_cases,
+      default_clock_case
     )
   end
 end

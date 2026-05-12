@@ -4,10 +4,11 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   This module owns the conversion from `SvPortSim.SignalSpec` metadata to:
 
-    * normalized signal metadata
-    * JSON metadata embedded in the wrapper source
-    * `poke_signal/3` dispatch cases
-    * `peek_signal/2` dispatch cases
+  * normalized signal metadata
+  * JSON metadata embedded in the wrapper source
+  * `poke_signal/3` dispatch cases
+  * `peek_signal/2` dispatch cases
+  * clock dispatch cases for `tick` and `cycle`
 
   The generated fragments intentionally support only direct native C++ field
   access for top-level Verilated fields whose names are valid C++ identifiers
@@ -24,7 +25,9 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
           normalized_signal_specs: [SignalSpec.t()],
           signal_specs_json: String.t(),
           poke_cases: String.t(),
-          peek_cases: String.t()
+          peek_cases: String.t(),
+          clock_cases: String.t(),
+          default_clock_case: String.t()
         }
 
   @doc """
@@ -39,31 +42,42 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     with {:ok, normalized} <- SignalSpec.normalize_many(signal_specs),
          :ok <- SignalSpec.validate_many(normalized) do
       accessors = Enum.map(normalized, &accessor_spec/1)
+      clocks = Enum.filter(accessors, & &1.clock?)
 
       {:ok,
        %{
          normalized_signal_specs: normalized,
          signal_specs_json: JsonLiteral.json(normalized),
          poke_cases: poke_cases(accessors),
-         peek_cases: peek_cases(accessors)
+         peek_cases: peek_cases(accessors),
+         clock_cases: clock_cases(clocks),
+         default_clock_case: default_clock_case(clocks)
        }}
     else
       {:error, reason} -> {:error, {:invalid_signal_specs, reason}}
     end
   end
 
-  defp accessor_spec(%{
-         "name" => name,
-         "direction" => direction,
-         "type" => type,
-         "width" => width
-       }) do
+  defp accessor_spec(
+         %{
+           "name" => name,
+           "direction" => direction,
+           "type" => type,
+           "width" => width
+         } = signal_spec
+       ) do
+    role = Map.get(signal_spec, "role") || %{"kind" => "data"}
+    role_kind = Map.get(role, "kind", "data")
+
     %{
       name: name,
       field: name,
       direction: direction,
       type: type,
       width: width,
+      role_kind: role_kind,
+      clock?: role_kind == "clock",
+      clock_edge: Map.get(role, "edge"),
       supported?: Regex.match?(@cpp_identifier, name) and width <= @max_native_accessor_width,
       readable?: direction in ["output", "inout"],
       writable?: direction in ["input", "inout"]
@@ -76,6 +90,10 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp peek_cases(accessors) do
     Enum.map_join(accessors, "\n", &peek_case/1)
+  end
+
+  defp clock_cases(clocks) do
+    Enum.map_join(clocks, "\n", &clock_case/1)
   end
 
   defp poke_case(%{name: name, supported?: false}) do
@@ -100,9 +118,11 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       if (!valid_two_state_encoded_value(value, #{width})) {
         return invalid_value_accessor(signal, "invalid encoded value");
       }
+
       auto top = session.top_model();
       top->#{field} = static_cast<decltype(top->#{field})>(bits_to_uint64(value.bits));
       session.eval();
+
       return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
     }
     """
@@ -128,8 +148,49 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     """
     if (signal == "#{JsonLiteral.cpp_string(name)}") {
       auto top = session.top_model();
+
       return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
     }
     """
   end
+
+  defp clock_case(%{name: name, supported?: false}) do
+    """
+    if (clock == "#{JsonLiteral.cpp_string(name)}") {
+      return invalid_clock(clock, "clock shape is not supported by generated accessors");
+    }
+    """
+  end
+
+  defp clock_case(%{name: name, field: field, clock_edge: edge}) do
+    posedge? = edge == "posedge"
+
+    """
+    if (clock == "#{JsonLiteral.cpp_string(name)}") {
+      auto top = session.top_model();
+
+      session.tick_clock([top](int value) {
+        top->#{field} = static_cast<decltype(top->#{field})>(value);
+      }, #{cpp_bool(posedge?)});
+
+      return ok_clock(clock);
+    }
+    """
+  end
+
+  defp default_clock_case([%{name: name}]) do
+    """
+    clock = "#{JsonLiteral.cpp_string(name)}";
+    return true;
+    """
+  end
+
+  defp default_clock_case(_clocks) do
+    """
+    return false;
+    """
+  end
+
+  defp cpp_bool(true), do: "true"
+  defp cpp_bool(false), do: "false"
 end

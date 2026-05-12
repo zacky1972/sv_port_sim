@@ -241,7 +241,7 @@ defmodule SvPortSim.Protocol.Command do
   The MVP command set is fixed and ordered for documentation and tests.
 
       iex> SvPortSim.Protocol.Command.command_names()
-      ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
+      ["metadata", "reset", "eval", "poke", "tick", "cycle", "peek", "finish?", "shutdown"]
 
   Metadata discovery uses an empty request body and reports the model metadata.
 
@@ -310,7 +310,7 @@ defmodule SvPortSim.Protocol.Command do
 
   alias SvPortSim.Protocol
 
-  @command_names ~w(metadata reset poke tick peek shutdown)
+  @command_names ~w(metadata reset eval poke tick cycle peek finish? shutdown)
   @error_codes ~w(
     invalid_command
     unsupported_command
@@ -362,6 +362,22 @@ defmodule SvPortSim.Protocol.Command do
         ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
+      name: "eval",
+      request: %{required: %{}, optional: %{}},
+      response: %{
+        required: %{
+          "time" => "non_neg_integer",
+          "cycle" => "non_neg_integer"
+        },
+        optional: %{}
+      },
+      wrapper_operation:
+        "Call eval() once to settle the current model state without advancing simulation time or cycle.",
+      idempotency: :idempotent,
+      errors:
+        ~w(unsupported_command invalid_request invalid_state unsupported_feature wrapper_fault)
+    },
+    %{
       name: "poke",
       request: %{
         required: %{"signal" => "string", "value" => "encoded_value"},
@@ -401,6 +417,26 @@ defmodule SvPortSim.Protocol.Command do
         ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
+      name: "cycle",
+      request: %{
+        required: %{"cycles" => "positive_integer"},
+        optional: %{"clock" => "string"}
+      },
+      response: %{
+        required: %{
+          "clock" => "string",
+          "cycles" => "positive_integer",
+          "cycle" => "non_neg_integer"
+        },
+        optional: %{"time" => "non_neg_integer"}
+      },
+      wrapper_operation:
+        "Advance the requested number of complete clock cycles on the selected clock.",
+      idempotency: :state_changing,
+      errors:
+        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
+    },
+    %{
       name: "peek",
       request: %{required: %{"signal" => "string"}, optional: %{}},
       response: %{
@@ -415,6 +451,22 @@ defmodule SvPortSim.Protocol.Command do
       idempotency: :read_only,
       errors:
         ~w(unsupported_command invalid_request invalid_signal invalid_state unsupported_feature wrapper_fault)
+    },
+    %{
+      name: "finish?",
+      request: %{required: %{}, optional: %{}},
+      response: %{
+        required: %{
+          "finished" => "boolean",
+          "time" => "non_neg_integer",
+          "cycle" => "non_neg_integer"
+        },
+        optional: %{}
+      },
+      wrapper_operation:
+        "Query whether Verilator has requested finish without terminating the wrapper process.",
+      idempotency: :read_only,
+      errors: ~w(unsupported_command invalid_request invalid_state wrapper_fault)
     },
     %{
       name: "shutdown",
@@ -446,7 +498,7 @@ defmodule SvPortSim.Protocol.Command do
   ## Examples
 
       iex> SvPortSim.Protocol.Command.command_names()
-      ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
+      ["metadata", "reset", "eval", "poke", "tick", "cycle", "peek", "finish?", "shutdown"]
   """
   @spec command_names() :: [command_name()]
   def command_names(), do: @command_names
@@ -471,7 +523,7 @@ defmodule SvPortSim.Protocol.Command do
   ## Examples
 
       iex> SvPortSim.Protocol.Command.command_specs() |> Enum.map(& &1.name)
-      ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
+      ["metadata", "reset", "eval", "poke", "tick", "cycle", "peek", "finish?", "shutdown"]
   """
   @spec command_specs() :: [command_spec()]
   def command_specs(), do: @command_specs
@@ -798,6 +850,8 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
+  def validate_request_body("eval", body), do: validate_empty_body("eval", body)
+
   def validate_request_body("poke", %{} = body) do
     with :ok <- validate_required_non_empty_string("poke", body, "signal"),
          :ok <- validate_required_encoded_value("poke", body, "value") do
@@ -812,11 +866,20 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
+  def validate_request_body("cycle", %{} = body) do
+    with :ok <- validate_required_positive_integer("cycle", body, "cycles"),
+         :ok <- validate_optional_non_empty_string("cycle", body, "clock") do
+      validate_allowed_keys("cycle", body, ~w(clock cycles))
+    end
+  end
+
   def validate_request_body("peek", %{} = body) do
     with :ok <- validate_required_non_empty_string("peek", body, "signal") do
       validate_allowed_keys("peek", body, ~w(signal))
     end
   end
+
+  def validate_request_body("finish?", body), do: validate_empty_body("finish?", body)
 
   def validate_request_body("shutdown", body), do: validate_empty_body("shutdown", body)
 
@@ -859,6 +922,13 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
+  def validate_response_body("eval", %{} = body) do
+    with :ok <- validate_required_non_negative_integer("eval", body, "time"),
+         :ok <- validate_required_non_negative_integer("eval", body, "cycle") do
+      validate_allowed_keys("eval", body, ~w(time cycle))
+    end
+  end
+
   def validate_response_body("poke", %{} = body),
     do: validate_signal_value_cycle_body("poke", body)
 
@@ -870,8 +940,25 @@ defmodule SvPortSim.Protocol.Command do
     end
   end
 
+  def validate_response_body("cycle", %{} = body) do
+    with :ok <- validate_required_non_empty_string("cycle", body, "clock"),
+         :ok <- validate_required_positive_integer("cycle", body, "cycles"),
+         :ok <- validate_required_non_negative_integer("cycle", body, "cycle"),
+         :ok <- validate_optional_non_negative_integer("cycle", body, "time") do
+      validate_allowed_keys("cycle", body, ~w(clock cycles cycle time))
+    end
+  end
+
   def validate_response_body("peek", %{} = body),
     do: validate_signal_value_cycle_body("peek", body)
+
+  def validate_response_body("finish?", %{} = body) do
+    with :ok <- validate_required_boolean("finish?", body, "finished"),
+         :ok <- validate_required_non_negative_integer("finish?", body, "time"),
+         :ok <- validate_required_non_negative_integer("finish?", body, "cycle") do
+      validate_allowed_keys("finish?", body, ~w(finished time cycle))
+    end
+  end
 
   def validate_response_body("shutdown", %{"status" => "closing"} = body) do
     validate_allowed_keys("shutdown", body, ~w(status))
@@ -903,6 +990,22 @@ defmodule SvPortSim.Protocol.Command do
   """
   @spec validate_error_body(term()) :: :ok | {:error, term()}
   def validate_error_body(body), do: Protocol.validate_error_body(body)
+
+  defp validate_required_boolean(command, body, field) do
+    case Map.fetch(body, field) do
+      {:ok, value} when is_boolean(value) -> :ok
+      {:ok, value} -> {:error, {:invalid_field, command, field, value}}
+      :error -> {:error, {:missing_field, command, field}}
+    end
+  end
+
+  defp validate_optional_non_negative_integer(command, body, field) do
+    case Map.fetch(body, field) do
+      {:ok, value} when is_integer(value) and value >= 0 -> :ok
+      {:ok, value} -> {:error, {:invalid_field, command, field, value}}
+      :error -> :ok
+    end
+  end
 
   defp validate_kind(%{"kind" => actual}, expected) when actual == expected, do: :ok
 
