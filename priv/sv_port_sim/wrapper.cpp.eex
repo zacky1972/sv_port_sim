@@ -77,6 +77,14 @@ struct AccessorResult {
   std::string signal;
 };
 
+struct ClockResult {
+  bool ok = false;
+  std::string code;
+  std::string message;
+  std::string clock;
+};
+
+
 AccessorResult ok_accessor(const EncodedValue& value) {
   AccessorResult result;
   result.ok = true;
@@ -101,6 +109,23 @@ AccessorResult invalid_value_accessor(const std::string& signal,
   result.code = "invalid_value";
   result.message = message;
   result.signal = signal;
+  return result;
+}
+
+
+ClockResult ok_clock(const std::string& clock) {
+  ClockResult result;
+  result.ok = true;
+  result.clock = clock;
+  return result;
+}
+
+ClockResult invalid_clock(const std::string& clock, const std::string& message) {
+  ClockResult result;
+  result.ok = false;
+  result.code = "invalid_signal";
+  result.message = message;
+  result.clock = clock;
   return result;
 }
 
@@ -1094,6 +1119,25 @@ class SimulationSession {
     }
   }
 
+  template <typename SetClock>
+  void tick_clock(SetClock set_clock, bool posedge) {
+    const int inactive = posedge ? 0 : 1;
+    const int active = posedge ? 1 : 0;
+
+    set_clock(inactive);
+    top_->eval();
+
+    contextp_->timeInc(1);
+    set_clock(active);
+    top_->eval();
+
+    contextp_->timeInc(1);
+    set_clock(inactive);
+    top_->eval();
+
+    ++cycle_;
+  }
+
   void final() {
     if (!finalized_) {
       top_->final();
@@ -1139,6 +1183,15 @@ AccessorResult peek_signal(SimulationSession& session, const std::string& signal
 int finish_session(SimulationSession& session, int exit_code) {
   session.final();
   return exit_code;
+}
+
+ClockResult tick_clock(SimulationSession& session, const std::string& clock) {
+<%= clock_cases %>
+  return invalid_clock(clock, "unknown clock");
+}
+
+bool default_clock(std::string& clock) {
+<%= default_clock_case %>
 }
 
 class CommandDispatcher {
