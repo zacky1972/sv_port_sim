@@ -205,4 +205,80 @@ defmodule SvPortSimTest do
              shutdown: 5_000
            } = SvPortSim.child_spec(transport: ScriptedTransport, id: :alu_sim)
   end
+
+  test "start/1 accepts GenServer name option and public calls work through the name" do
+    name = :"sv_port_sim_#{System.unique_integer([:positive])}"
+
+    {:ok, pid} = SvPortSim.start(transport: ScriptedTransport, name: name)
+
+    assert Process.whereis(name) == pid
+    assert {:ok, %{"cycles" => 1}} = SvPortSim.tick(name)
+    assert :ok = SvPortSim.stop(name)
+    assert Process.whereis(name) == nil
+  end
+
+  test "requests use monotonic ids and resolve default and per-command timeouts" do
+    {:ok, sim} =
+      SvPortSim.start_link(
+        transport: SvPortSimTest.RecordingTransport,
+        default_timeout: 123,
+        transport_opts: [test_pid: self()]
+      )
+
+    assert {:ok, %{"cycles" => 1}} = SvPortSim.tick(sim)
+
+    assert_receive {:transport_request, %{"id" => 0, "op" => "tick", "body" => %{"cycles" => 1}},
+                    123}
+
+    assert {:ok, %{"value" => %{"bits" => "0", "width" => 1}}} =
+             SvPortSim.peek(sim, "count", timeout: 456)
+
+    assert_receive {:transport_request,
+                    %{"id" => 1, "op" => "peek", "body" => %{"signal" => "count"}}, 456}
+
+    assert :ok = SvPortSim.stop(sim)
+
+    assert_receive {:transport_request, %{"id" => 2, "op" => "shutdown", "body" => %{}}, 123}
+  end
+
+  test "calling a stopped instance returns canonical port_closed error" do
+    {:ok, sim} = SvPortSim.start_link(transport: ScriptedTransport)
+
+    assert :ok = SvPortSim.stop(sim)
+
+    assert {:error, %{"code" => "port_closed", "fatal" => true}} =
+             SvPortSim.tick(sim)
+  end
+
+  test "non-fatal shutdown error keeps the instance alive" do
+    {:ok, sim} =
+      SvPortSim.start_link(
+        transport: SvPortSimTest.NonFatalShutdownTransport,
+        transport_opts: [test_pid: self()]
+      )
+
+    assert {:error, %{"code" => "invalid_state", "fatal" => false}} =
+             SvPortSim.stop(sim)
+
+    assert Process.alive?(sim)
+    refute_receive {:transport_closed, _pid}, 50
+
+    assert :ok = SvPortSim.stop(sim)
+    assert_receive {:transport_closed, _pid}
+  end
+
+  test "fatal shutdown error closes the transport and stops the instance" do
+    {:ok, sim} =
+      SvPortSim.start_link(
+        transport: SvPortSimTest.FatalShutdownTransport,
+        transport_opts: [test_pid: self()]
+      )
+
+    assert {:error, %{"code" => "timeout", "fatal" => true}} =
+             SvPortSim.stop(sim)
+
+    refute Process.alive?(sim)
+    assert_receive {:transport_closed, _pid}
+    refute_receive {:transport_closed, _pid}, 50
+  end
 end
