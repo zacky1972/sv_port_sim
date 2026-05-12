@@ -149,6 +149,7 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
                ~S([{"direction":"input","name":"enable","packed":{"dimensions":[],"kind":"scalar"},"role":{"kind":"data"},"signed":false,"type":"bit","width":1}])
 
       assert context.poke_cases =~ ~s|if (signal == "enable")|
+
       assert context.poke_cases =~
                "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
 

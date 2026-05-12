@@ -22,11 +22,9 @@ defmodule SvPortSim.Verilator.Wrapper do
   digits, underscores, or dollar signs.
   """
 
-  alias SvPortSim.SignalSpec
+  alias SvPortSim.Verilator.Wrapper.Accessor
 
   @sv_identifier ~r/\A[A-Za-z_][A-Za-z0-9_$]*\z/
-  @cpp_identifier ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
-  @max_native_accessor_width 64
 
   @wrapper_template ~S"""
   #include "@@VERILATED_CLASS@@.h"
@@ -1489,7 +1487,7 @@ defmodule SvPortSim.Verilator.Wrapper do
   @spec source(term(), term()) :: {:ok, String.t()} | {:error, term()}
   def source(top_module, signal_specs) when is_binary(top_module) and is_list(signal_specs) do
     with :ok <- validate_top_module(top_module),
-         {:ok, context} <- accessor_context(signal_specs) do
+         {:ok, context} <- Accessor.context(signal_specs) do
       {:ok, wrapper_source(top_module, context)}
     end
   end
@@ -1556,143 +1554,19 @@ defmodule SvPortSim.Verilator.Wrapper do
     end
   end
 
-  defp wrapper_source(top_module, %{accessors: accessors, signal_specs_json: signal_specs_json}) do
+  defp wrapper_source(top_module, %{
+         signal_specs_json: signal_specs_json,
+         poke_cases: poke_cases,
+         peek_cases: peek_cases
+       }) do
     verilated_class = "V#{top_module}"
 
     @wrapper_template
     |> String.replace("@@VERILATED_CLASS@@", verilated_class)
     |> String.replace("@@TOP_MODULE@@", cpp_string(top_module))
     |> String.replace("@@SIGNAL_SPECS_JSON@@", signal_specs_json)
-    |> String.replace("@@POKE_CASES@@", poke_cases(accessors))
-    |> String.replace("@@PEEK_CASES@@", peek_cases(accessors))
-  end
-
-  defp accessor_context(signal_specs) do
-    with {:ok, normalized} <- SignalSpec.normalize_many(signal_specs),
-         :ok <- SignalSpec.validate_many(normalized) do
-      {:ok,
-       %{
-         accessors: Enum.map(normalized, &accessor_spec/1),
-         signal_specs_json: json_value(normalized)
-       }}
-    else
-      {:error, reason} -> {:error, {:invalid_signal_specs, reason}}
-    end
-  end
-
-  defp accessor_spec(%{
-         "name" => name,
-         "direction" => direction,
-         "type" => type,
-         "width" => width
-       }) do
-    %{
-      name: name,
-      field: name,
-      direction: direction,
-      type: type,
-      width: width,
-      supported?: Regex.match?(@cpp_identifier, name) and width <= @max_native_accessor_width,
-      readable?: direction in ["output", "inout"],
-      writable?: direction in ["input", "inout"]
-    }
-  end
-
-  defp poke_cases(accessors) do
-    Enum.map_join(accessors, "\n", &poke_case/1)
-  end
-
-  defp peek_cases(accessors) do
-    Enum.map_join(accessors, "\n", &peek_case/1)
-  end
-
-  defp poke_case(%{name: name, supported?: false}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
-      }
-    """
-  end
-
-  defp poke_case(%{name: name, writable?: false}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        return invalid_signal_accessor(signal, "signal is not writable");
-      }
-    """
-  end
-
-  defp poke_case(%{name: name, field: field, width: width}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        if (!valid_two_state_encoded_value(value, #{width})) {
-          return invalid_value_accessor(signal, "invalid encoded value");
-        }
-
-        auto top = session.top_model();
-        top->#{field} = static_cast<decltype(top->#{field})>(bits_to_uint64(value.bits));
-        session.eval();
-
-        return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
-      }
-    """
-  end
-
-  defp peek_case(%{name: name, supported?: false}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
-      }
-    """
-  end
-
-  defp peek_case(%{name: name, readable?: false}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        return invalid_signal_accessor(signal, "signal is not readable");
-      }
-    """
-  end
-
-  defp peek_case(%{name: name, field: field, width: width}) do
-    """
-      if (signal == "#{cpp_string(name)}") {
-        auto top = session.top_model();
-        return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
-      }
-    """
-  end
-
-  defp json_value(value) when is_list(value) do
-    "[" <> Enum.map_join(value, ",", &json_value/1) <> "]"
-  end
-
-  defp json_value(%{} = value) do
-    entries =
-      value
-      |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-      |> Enum.map(fn {key, item} -> json_string(to_string(key)) <> ":" <> json_value(item) end)
-
-    "{" <> Enum.join(entries, ",") <> "}"
-  end
-
-  defp json_value(value) when is_binary(value), do: json_string(value)
-  defp json_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp json_value(value) when is_boolean(value), do: if(value, do: "true", else: "false")
-  defp json_value(nil), do: "null"
-
-  defp json_string(value) do
-    escaped =
-      value
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("\b", "\\b")
-      |> String.replace("\f", "\\f")
-      |> String.replace("\n", "\\n")
-      |> String.replace("\r", "\\r")
-      |> String.replace("\t", "\\t")
-
-    "\"#{escaped}\""
+    |> String.replace("@@POKE_CASES@@", poke_cases)
+    |> String.replace("@@PEEK_CASES@@", peek_cases)
   end
 
   defp cpp_string(value) do
