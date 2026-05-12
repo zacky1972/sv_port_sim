@@ -37,6 +37,7 @@ defmodule SvPortSim.Verilator.Wrapper do
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -1100,42 +1101,43 @@ EncodedValue encode_signal(std::uint64_t value, int width) {
 class SimulationSession {
  public:
   SimulationSession(int argc, char** argv)
-      : contextp(new VerilatedContext), top(nullptr), finalized(false), cycle_(0) {
-    contextp->commandArgs(argc, argv);
-    top = new @@VERILATED_CLASS@@{contextp};
+      : contextp_(new VerilatedContext),
+        top_(nullptr),
+        finalized_(false),
+        cycle_(0) {
+    contextp_->commandArgs(argc, argv);
+    top_.reset(new @@VERILATED_CLASS@@{contextp_.get()});
   }
 
   ~SimulationSession() {
     final();
-    delete top;
-    delete contextp;
   }
 
   void eval() {
-    top->eval();
+    top_->eval();
   }
 
   void advance_cycles(std::uint64_t cycles) {
     for (std::uint64_t cycle = 0; cycle < cycles; ++cycle) {
-      contextp->timeInc(1);
-      top->eval();
+      contextp_->timeInc(1);
+      top_->eval();
       ++cycle_;
     }
   }
 
   void final() {
-    if (!finalized) {
-      top->final();
-      finalized = true;
+    if (!finalized_) {
+      top_->final();
+      finalized_ = true;
     }
   }
 
   bool finished() const {
-    return contextp->gotFinish();
+    return contextp_->gotFinish();
   }
 
   std::uint64_t time() const {
-    return static_cast<std::uint64_t>(contextp->time());
+    return static_cast<std::uint64_t>(contextp_->time());
   }
 
   std::uint64_t cycle() const {
@@ -1143,13 +1145,13 @@ class SimulationSession {
   }
 
   @@VERILATED_CLASS@@* top_model() {
-    return top;
+    return top_.get();
   }
 
  private:
-  VerilatedContext* contextp;
-  @@VERILATED_CLASS@@* top;
-  bool finalized;
+  std::unique_ptr<VerilatedContext> contextp_;
+  std::unique_ptr<@@VERILATED_CLASS@@> top_;
+  bool finalized_;
   std::uint64_t cycle_;
 };
 
