@@ -42,15 +42,18 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert occurrences(source, "new VCounter{contextp_.get()}") == 1
   end
 
-  test "source/1 advances shared VerilatedContext time for tick and cycle" do
-    assert {:ok, source} = Wrapper.source("Counter")
+  test "source/1 advances VerilatedContext time through named clock ticks" do
+    assert {:ok, source} = Wrapper.source("Counter", [SignalSpec.clock("clk")])
 
-    assert source =~ ~s(op == "tick" || op == "cycle")
-    assert source =~ "void advance_cycles(std::uint64_t cycles)"
-    assert source =~ "contextp_->timeInc(1);"
-    assert source =~ "session_.advance_cycles(cycles);"
-    assert source =~ ~S(\"time\":)
-    assert source =~ ~S(\"cycles\":)
+    assert source =~ "void tick_clock(SetClock set_clock, bool posedge)"
+    assert source =~ "bool parse_clock(const Request& request"
+    assert source =~ "const ClockResult tick = tick_clock(session_, clock);"
+    refute source =~ "session_.advance_cycles(cycles);"
+
+    assert source =~ ~S|body << "{\"clock\":" << json_quote(clock)|
+    assert source =~ ~S|<< ",\"cycles\":" << cycles|
+    assert source =~ ~S|<< ",\"time\":" << session_.time()|
+    assert source =~ ~S|<< ",\"cycle\":" << session_.cycle()|
   end
 
   test "source/1 finalizes through one guarded terminal cleanup path" do
@@ -134,6 +137,49 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert path == Path.join(dir, "Counter_wrapper.cpp")
     assert File.exists?(path)
     assert File.read!(path) =~ ~s(#include "VCounter.h")
+  end
+
+  test "source/2 emits non-fatal validation errors for invalid clock and cycles" do
+    assert {:ok, source} = Wrapper.source("Counter", [SignalSpec.clock("clk")])
+
+    assert source =~ ~s|"invalid_signal"|
+    assert source =~ ~s|"invalid clock"|
+    assert source =~ "clock_detail(tick.clock)"
+    assert source =~ ~s|"invalid_value"|
+    assert source =~ ~s|"cycle count must be positive"|
+    assert source =~ "false"
+  end
+
+  test "source/2 defaults omitted clock only when exactly one clock exists" do
+    assert {:ok, one_clock_source} =
+             Wrapper.source("Counter", [SignalSpec.clock("clk")])
+
+    assert one_clock_source =~ ~s|clock = "clk";|
+    assert one_clock_source =~ "return true;"
+
+    assert {:ok, no_clock_source} = Wrapper.source("Counter", [])
+
+    assert no_clock_source =~ "return false;"
+  end
+
+  test "source/2 generates clock dispatch for posedge and negedge clocks" do
+    specs = [
+      SignalSpec.clock("clk"),
+      SignalSpec.clock("nclk", edge: "negedge")
+    ]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ ~s|if (clock == "clk")|
+    assert source =~ "top->clk = static_cast<decltype(top->clk)>(value);"
+    assert source =~ "session.tick_clock"
+    assert source =~ ", true);"
+
+    assert source =~ ~s|if (clock == "nclk")|
+    assert source =~ "top->nclk = static_cast<decltype(top->nclk)>(value);"
+    assert source =~ ", false);"
+
+    assert source =~ ~s|return invalid_clock(clock, "unknown clock");|
   end
 
   test "source/2 generates poke and peek dispatch from signal specs" do
