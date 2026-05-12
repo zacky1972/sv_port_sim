@@ -1,4 +1,4 @@
-efmodule SvPortSim.Verilator.Wrapper.AccessorTest do
+defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
   use ExUnit.Case, async: true
 
   alias SvPortSim.SignalSpec

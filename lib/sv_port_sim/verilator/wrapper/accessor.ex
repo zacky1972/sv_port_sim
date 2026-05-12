@@ -65,22 +65,11 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp accessor_spec(
          %{
-           name: name,
-           field: name,
-           direction: direction,
-           type: type,
-           width: width,
-           role_kind: role_kind,
-           clock?: role_kind == "clock",
-           clock_edge: Map.get(role, "edge"),
-           reset?: role_kind == "reset",
-           reset_active: Map.get(role, "active"),
-           supported?:
-             Regex.match?(@cpp_identifier, name) and width <= @max_native_accessor_width,
-           readable?: direction in ["output", "inout"],
-           writable?: direction in ["input", "inout"]
-         } =
-           signal_spec
+           "name" => name,
+           "direction" => direction,
+           "type" => type,
+           "width" => width
+         } = signal_spec
        ) do
     role = Map.get(signal_spec, "role") || %{"kind" => "data"}
     role_kind = Map.get(role, "kind", "data")
@@ -94,6 +83,8 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       role_kind: role_kind,
       clock?: role_kind == "clock",
       clock_edge: Map.get(role, "edge"),
+      reset?: role_kind == "reset",
+      reset_active: Map.get(role, "active"),
       supported?: Regex.match?(@cpp_identifier, name) and width <= @max_native_accessor_width,
       readable?: direction in ["output", "inout"],
       writable?: direction in ["input", "inout"]
