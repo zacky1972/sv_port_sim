@@ -18,29 +18,29 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
   @external_resource @wrapper_source_path
 
   @wrapper_template (
-    source = File.read!(@wrapper_source_path)
-    marker = "@wrapper_template ~S\"\"\"\n"
+                      source = File.read!(@wrapper_source_path)
+                      marker = "@wrapper_template ~S\"\"\"\n"
 
-    rest =
-      case String.split(source, marker, parts: 2) do
-        [_prefix, rest] ->
-          rest
+                      rest =
+                        case String.split(source, marker, parts: 2) do
+                          [_prefix, rest] ->
+                            rest
 
-        _other ->
-          raise "could not find @wrapper_template in #{@wrapper_source_path}"
-      end
+                          _other ->
+                            raise "could not find @wrapper_template in #{@wrapper_source_path}"
+                        end
 
-    body =
-      case String.split(rest, "\n  \"\"\"", parts: 2) do
-        [body, _suffix] ->
-          String.replace(body <> "\n", ~r/^  /m, "")
+                      body =
+                        case String.split(rest, "\n  \"\"\"", parts: 2) do
+                          [body, _suffix] ->
+                            String.replace(body <> "\n", ~r/^  /m, "")
 
-        _other ->
-          raise "could not find @wrapper_template terminator in #{@wrapper_source_path}"
-      end
+                          _other ->
+                            raise "could not find @wrapper_template terminator in #{@wrapper_source_path}"
+                        end
 
-    body
-  )
+                      body
+                    )
 
   @doc """
   Renders wrapper C++ source for `top_module` using prebuilt accessor context.
