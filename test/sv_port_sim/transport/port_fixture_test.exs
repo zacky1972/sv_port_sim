@@ -16,7 +16,16 @@ defmodule SvPortSim.Transport.PortFixtureTest do
     trace = trace_path()
     {:ok, sim} = start_sim(trace)
 
-    assert {:ok, %{"cycle" => 2, "reset" => %{"cycles" => 2, "signal" => "rst_n"}}} =
+    assert {:ok,
+            %{
+              "cycle" => 2,
+              "reset" => "rst_n",
+              "clock" => "clk",
+              "cycles" => 2,
+              "active" => 0,
+              "inactive" => 1,
+              "final" => 1
+            }} =
              SvPortSim.reset(sim, cycles: 2, reset: :rst_n)
 
     assert {:ok, %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}, "cycle" => 2}} =
