@@ -207,8 +207,14 @@ defmodule SvPortSim.ServerTest do
     end
 
     test "normalizes bad transport open returns into start errors" do
-      assert {:error, {:bad_transport_return, :bad_open_return}} =
-               Server.start_link(transport: BadOpenTransport)
+      previous_trap_exit = Process.flag(:trap_exit, true)
+
+      try do
+        assert {:error, {:bad_transport_return, :bad_open_return}} =
+                 Server.start_link(transport: BadOpenTransport)
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
   end
 
