@@ -252,6 +252,127 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert File.read!(path) =~ "top->enable ="
   end
 
+  test "source/2 preserves generated poke dispatch semantics" do
+    assert {:ok, source} = Wrapper.source("Counter", accessor_fixture_specs())
+
+    assert generated_cpp_function(source, "poke_signal", "AccessorResult peek_signal") ==
+             normalize_cpp(~S"""
+             AccessorResult poke_signal(SimulationSession& session, const std::string& signal, const EncodedValue& value) {
+               if (signal == "enable") {
+                 if (!valid_two_state_encoded_value(value, 1)) {
+                   return invalid_value_accessor(signal, "invalid encoded value");
+                 }
+                 auto top = session.top_model();
+                 top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));
+                 session.eval();
+                 return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->enable), 1));
+               }
+
+               if (signal == "count") {
+                 return invalid_signal_accessor(signal, "signal is not writable");
+               }
+
+               if (signal == "bus") {
+                 if (!valid_two_state_encoded_value(value, 4)) {
+                   return invalid_value_accessor(signal, "invalid encoded value");
+                 }
+                 auto top = session.top_model();
+                 top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));
+                 session.eval();
+                 return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));
+               }
+
+               if (signal == "wide") {
+                 return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
+               }
+
+               return invalid_signal_accessor(signal, "unknown signal");
+             }
+             """)
+  end
+
+  test "source/2 preserves generated peek dispatch semantics" do
+    assert {:ok, source} = Wrapper.source("Counter", accessor_fixture_specs())
+
+    assert generated_cpp_function(source, "peek_signal", "int finish_session") ==
+             normalize_cpp(~S"""
+             AccessorResult peek_signal(SimulationSession& session, const std::string& signal) {
+               if (signal == "enable") {
+                 return invalid_signal_accessor(signal, "signal is not readable");
+               }
+
+               if (signal == "count") {
+                 auto top = session.top_model();
+                 return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));
+               }
+
+               if (signal == "bus") {
+                 auto top = session.top_model();
+                 return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));
+               }
+
+               if (signal == "wide") {
+                 return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
+               }
+
+               return invalid_signal_accessor(signal, "unknown signal");
+             }
+             """)
+  end
+
+  test "source/2 embeds deterministic full signal metadata JSON" do
+    assert {:ok, source} = Wrapper.source("Counter", accessor_fixture_specs())
+
+    assert embedded_signal_specs_json(source) ==
+             ~S([{"direction":"input","name":"enable","packed":{"dimensions":[],"kind":"scalar"},"role":{"kind":"data"},"signed":false,"type":"bit","width":1},{"direction":"output","name":"count","packed":{"dimensions":[{"left":7,"right":0}],"kind":"packed_vector"},"role":{"kind":"data"},"signed":false,"type":"logic","width":8},{"direction":"inout","name":"bus","packed":{"dimensions":[{"left":3,"right":0}],"kind":"packed_vector"},"role":{"kind":"data"},"signed":false,"type":"logic","width":4},{"direction":"input","name":"wide","packed":{"dimensions":[{"left":64,"right":0}],"kind":"packed_vector"},"role":{"kind":"data"},"signed":false,"type":"logic","width":65}])
+  end
+
+  test "source/2 treats SystemVerilog-only identifiers as unsupported native accessor fields" do
+    specs = [SignalSpec.data("debug$value", "inout", "logic", 1)]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ ~s|if (signal == "debug$value")|
+    assert source =~ "signal shape is not supported by generated accessors"
+    assert embedded_signal_specs_json(source) =~ ~S("name":"debug$value")
+
+    refute source =~ "top->debug$value"
+  end
+
+  defp accessor_fixture_specs do
+    [
+      SignalSpec.data("enable", "input", "bit", 1),
+      SignalSpec.data("count", "output", "logic", 8),
+      SignalSpec.data("bus", "inout", "logic", 4),
+      SignalSpec.data("wide", "input", "logic", 65)
+    ]
+  end
+
+  defp generated_cpp_function(source, function_name, next_marker) do
+    marker = "AccessorResult #{function_name}"
+    [_, tail] = String.split(source, marker, parts: 2)
+    [function_source, _] = String.split(tail, next_marker, parts: 2)
+
+    normalize_cpp(marker <> function_source)
+  end
+
+  defp embedded_signal_specs_json(source) do
+    prefix = ~s|const char* kSignalSpecsJson = R"svps_json(|
+    suffix = ~s|)svps_json";|
+    [_, tail] = String.split(source, prefix, parts: 2)
+    [json, _] = String.split(tail, suffix, parts: 2)
+
+    json
+  end
+
+  defp normalize_cpp(source) do
+    source
+    |> String.replace(~r/\s+/, " ")
+    |> String.replace(~r/\s*([{}();,])\s*/, "\\1")
+    |> String.replace(~r/\s*(==|=|->|::|<|>)\s*/, "\\1")
+    |> String.trim()
+  end
+
   defp occurrences(haystack, needle) do
     length(String.split(haystack, needle)) - 1
   end
