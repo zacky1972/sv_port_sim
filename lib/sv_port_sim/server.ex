@@ -119,22 +119,20 @@ defmodule SvPortSim.Server do
   @spec request(instance(), String.t(), request_body(), timeout_override()) ::
           {:ok, response_body()} | {:error, error_body()}
   def request(instance, op, body, timeout_override) do
-    try do
-      GenServer.call(
-        instance,
-        {:request, op, body, timeout_override},
-        call_timeout(timeout_override)
-      )
-    catch
-      :exit, {:timeout, _details} ->
-        runtime_failure({:timeout, "unknown", op, timeout_override})
+    GenServer.call(
+      instance,
+      {:request, op, body, timeout_override},
+      call_timeout(timeout_override)
+    )
+  catch
+    :exit, {:timeout, _details} ->
+      runtime_failure({:timeout, "unknown", op, timeout_override})
 
-      :exit, {:noproc, _details} ->
-        runtime_failure(:port_closed, %{"reason" => "simulation instance is not running"})
+    :exit, {:noproc, _details} ->
+      runtime_failure(:port_closed, %{"reason" => "simulation instance is not running"})
 
-      :exit, reason ->
-        runtime_failure({:simulator_failure, reason})
-    end
+    :exit, reason ->
+      runtime_failure({:simulator_failure, reason})
   end
 
   @doc """
@@ -147,18 +145,16 @@ defmodule SvPortSim.Server do
   """
   @spec stop(instance(), timeout_override()) :: :ok | {:error, error_body()}
   def stop(instance, timeout_override) do
-    try do
-      GenServer.call(instance, {:stop, timeout_override}, call_timeout(timeout_override))
-    catch
-      :exit, {:timeout, _details} ->
-        runtime_failure({:timeout, "stop", "shutdown", timeout_override})
+    GenServer.call(instance, {:stop, timeout_override}, call_timeout(timeout_override))
+  catch
+    :exit, {:timeout, _details} ->
+      runtime_failure({:timeout, "stop", "shutdown", timeout_override})
 
-      :exit, {:noproc, _details} ->
-        runtime_failure(:port_closed, %{"reason" => "simulation instance is not running"})
+    :exit, {:noproc, _details} ->
+      runtime_failure(:port_closed, %{"reason" => "simulation instance is not running"})
 
-      :exit, reason ->
-        runtime_failure({:simulator_failure, reason})
-    end
+    :exit, reason ->
+      runtime_failure({:simulator_failure, reason})
   end
 
   @impl true
