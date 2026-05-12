@@ -385,6 +385,47 @@ defmodule SvPortSim.Verilator.WrapperTest do
     refute source =~ "top->debug$value"
   end
 
+  test "tracing is disabled by default" do
+    assert {:ok, source} = Wrapper.source("Counter")
+
+    refute source =~ "verilated_vcd_c.h"
+    refute source =~ "verilated_fst_c.h"
+    refute source =~ "traceEverOn"
+    refute source =~ "tracep_"
+    refute source =~ ".vcd"
+    refute source =~ ".fst"
+  end
+
+  test "VCD tracing hooks can be generated" do
+    assert {:ok, source} = Wrapper.source("Counter", [], trace: :vcd)
+
+    assert source =~ ~s(#include "verilated_vcd_c.h")
+    assert source =~ "VerilatedVcdC"
+    assert source =~ "+svps_trace"
+    assert source =~ "+svps_trace_file="
+    assert source =~ "trace.vcd"
+    assert source =~ "traceEverOn(true)"
+    assert source =~ "top_->trace(tracep_.get(), 99)"
+    assert source =~ "tracep_->open"
+    assert source =~ "tracep_->dump(contextp_->time())"
+    assert source =~ "tracep_->close()"
+  end
+
+  test "FST tracing hooks can be generated" do
+    assert {:ok, source} = Wrapper.source("Counter", [], trace: :fst)
+
+    assert source =~ ~s(#include "verilated_fst_c.h")
+    assert source =~ "VerilatedFstC"
+    assert source =~ "trace.fst"
+    assert source =~ "tracep_->dump(contextp_->time())"
+    assert source =~ "tracep_->close()"
+  end
+
+  test "unsupported trace mode returns structured error" do
+    assert {:error, {:unsupported_trace_mode, :saif}} =
+             Wrapper.source("Counter", [], trace: :saif)
+  end
+
   defp accessor_fixture_specs do
     [
       SignalSpec.data("enable", "input", "bit", 1),
