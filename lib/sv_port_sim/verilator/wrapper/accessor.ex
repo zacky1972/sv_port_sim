@@ -15,6 +15,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
   """
 
   alias SvPortSim.SignalSpec
+  alias SvPortSim.Verilator.Wrapper.JsonLiteral
 
   @cpp_identifier ~r/\A[A-Za-z_][A-Za-z0-9_]*\z/
   @max_native_accessor_width 64
@@ -42,7 +43,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       {:ok,
        %{
          normalized_signal_specs: normalized,
-         signal_specs_json: json_value(normalized),
+         signal_specs_json: JsonLiteral.json(normalized),
          poke_cases: poke_cases(accessors),
          peek_cases: peek_cases(accessors)
        }}
@@ -79,7 +80,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp poke_case(%{name: name, supported?: false}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
     }
     """
@@ -87,7 +88,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp poke_case(%{name: name, writable?: false}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       return invalid_signal_accessor(signal, "signal is not writable");
     }
     """
@@ -95,7 +96,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp poke_case(%{name: name, field: field, width: width}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       if (!valid_two_state_encoded_value(value, #{width})) {
         return invalid_value_accessor(signal, "invalid encoded value");
       }
@@ -109,7 +110,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp peek_case(%{name: name, supported?: false}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
     }
     """
@@ -117,7 +118,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp peek_case(%{name: name, readable?: false}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       return invalid_signal_accessor(signal, "signal is not readable");
     }
     """
@@ -125,51 +126,10 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
 
   defp peek_case(%{name: name, field: field, width: width}) do
     """
-    if (signal == "#{cpp_string(name)}") {
+    if (signal == "#{JsonLiteral.cpp_string(name)}") {
       auto top = session.top_model();
       return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
     }
     """
-  end
-
-  defp json_value(value) when is_list(value) do
-    "[" <> Enum.map_join(value, ",", &json_value/1) <> "]"
-  end
-
-  defp json_value(%{} = value) do
-    entries =
-      value
-      |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-      |> Enum.map(fn {key, item} -> json_string(to_string(key)) <> ":" <> json_value(item) end)
-
-    "{" <> Enum.join(entries, ",") <> "}"
-  end
-
-  defp json_value(value) when is_binary(value), do: json_string(value)
-  defp json_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp json_value(value) when is_boolean(value), do: if(value, do: "true", else: "false")
-  defp json_value(nil), do: "null"
-
-  defp json_string(value) do
-    escaped =
-      value
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("\b", "\\b")
-      |> String.replace("\f", "\\f")
-      |> String.replace("\n", "\\n")
-      |> String.replace("\r", "\\r")
-      |> String.replace("\t", "\\t")
-
-    "\"#{escaped}\""
-  end
-
-  defp cpp_string(value) do
-    value
-    |> String.replace("\\", "\\\\")
-    |> String.replace("\"", "\\\"")
-    |> String.replace("\n", "\\n")
-    |> String.replace("\r", "\\r")
-    |> String.replace("\t", "\\t")
   end
 end
