@@ -371,9 +371,11 @@ defmodule SvPortSim.Protocol.Command do
         },
         optional: %{}
       },
-      wrapper_operation: "Call eval() once to settle the current model state without advancing simulation time or cycle.",
+      wrapper_operation:
+        "Call eval() once to settle the current model state without advancing simulation time or cycle.",
       idempotency: :idempotent,
-      errors: ~w(unsupported_command invalid_request invalid_state unsupported_feature wrapper_fault)
+      errors:
+        ~w(unsupported_command invalid_request invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "poke",
@@ -428,9 +430,11 @@ defmodule SvPortSim.Protocol.Command do
         },
         optional: %{"time" => "non_neg_integer"}
       },
-      wrapper_operation: "Advance the requested number of complete clock cycles on the selected clock.",
+      wrapper_operation:
+        "Advance the requested number of complete clock cycles on the selected clock.",
       idempotency: :state_changing,
-      errors: ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
+      errors:
+        ~w(unsupported_command invalid_request invalid_signal invalid_value invalid_state unsupported_feature wrapper_fault)
     },
     %{
       name: "peek",
@@ -459,7 +463,8 @@ defmodule SvPortSim.Protocol.Command do
         },
         optional: %{}
       },
-      wrapper_operation: "Query whether Verilator has requested finish without terminating the wrapper process.",
+      wrapper_operation:
+        "Query whether Verilator has requested finish without terminating the wrapper process.",
       idempotency: :read_only,
       errors: ~w(unsupported_command invalid_request invalid_state wrapper_fault)
     },

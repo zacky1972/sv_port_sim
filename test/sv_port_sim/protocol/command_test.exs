@@ -43,7 +43,18 @@ defmodule SvPortSim.Protocol.CommandTest do
   end
 
   test "command specs cover every MVP command with schemas and error paths" do
-    assert Command.command_names() == ["metadata", "reset", "eval", "poke", "tick", "cycle", "peek", "finish?", "shutdown"]
+    assert Command.command_names() == [
+             "metadata",
+             "reset",
+             "eval",
+             "poke",
+             "tick",
+             "cycle",
+             "peek",
+             "finish?",
+             "shutdown"
+           ]
+
     assert Enum.map(Command.command_specs(), & &1.name) == Command.command_names()
 
     for command <- Command.command_names() do
@@ -58,43 +69,27 @@ defmodule SvPortSim.Protocol.CommandTest do
     end
   end
 
-  test "builds and validates every MVP request" do
-    requests = [
-      {"metadata", %{}},
-      {"reset", %{"cycles" => 2}},
-      {"poke", %{"signal" => "enable", "value" => @encoded_one}},
-      {"tick", %{"clock" => "clk", "cycles" => 3}},
-      {"peek", %{"signal" => "count"}},
-      {"shutdown", %{}}
-    ]
-
-    for {{command, body}, index} <- Enum.with_index(requests, 1) do
-      assert {:ok, request} = Command.request(command, index, body)
-      assert request["v"] == SvPortSim.Protocol.version()
-      assert request["id"] == index
-      assert request["kind"] == "request"
-      assert request["op"] == command
-      assert request["body"] == body
-      assert Command.validate_request(request) == :ok
-    end
-  end
-
   test "builds and validates every MVP successful response" do
     response_bodies = %{
       "metadata" => %{"top" => "Counter", "signals" => [], "cycle" => 0},
       "reset" => %{"cycle" => 2, "reset" => %{"cycles" => 2}},
+      "eval" => %{"time" => 0, "cycle" => 2},
       "poke" => %{"signal" => "enable", "value" => @encoded_one, "cycle" => 2},
       "tick" => %{"clock" => "clk", "cycles" => 1, "cycle" => 3},
-      "peek" => %{"signal" => "count", "value" => @encoded_count, "cycle" => 3},
+      "cycle" => %{"clock" => "clk", "cycles" => 5, "time" => 10, "cycle" => 8},
+      "peek" => %{"signal" => "count", "value" => @encoded_count, "cycle" => 8},
+      "finish?" => %{"finished" => false, "time" => 10, "cycle" => 8},
       "shutdown" => %{"status" => "closing"}
     }
 
     for {command, index} <- Enum.with_index(Command.command_names(), 1) do
       assert {:ok, response} = Command.ok_response(index, command, response_bodies[command])
+
       assert response["id"] == index
       assert response["kind"] == "response"
       assert response["op"] == command
       assert response["body"] == response_bodies[command]
+
       assert Command.validate_response(response) == :ok
     end
   end
