@@ -34,7 +34,6 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
     refute source =~ "@@DEFAULT_CLOCK_CASE@@"
   end
 
-
   describe "render/2" do
     test "matches Wrapper.source/1 for an empty accessor context" do
       assert {:ok, context} = Accessor.context([])
