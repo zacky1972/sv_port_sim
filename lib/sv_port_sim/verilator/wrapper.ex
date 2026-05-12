@@ -1599,15 +1599,11 @@ defmodule SvPortSim.Verilator.Wrapper do
   end
 
   defp poke_cases(accessors) do
-    accessors
-    |> Enum.map(&poke_case/1)
-    |> Enum.join("\n")
+    Enum.map_join(accessors, "\n", &poke_case/1)
   end
 
   defp peek_cases(accessors) do
-    accessors
-    |> Enum.map(&peek_case/1)
-    |> Enum.join("\n")
+    Enum.map_join(accessors, "\n", &peek_case/1)
   end
 
   defp poke_case(%{name: name, supported?: false}) do
