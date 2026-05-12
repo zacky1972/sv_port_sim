@@ -58,12 +58,14 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     end
   end
 
-  defp accessor_spec(%{
-         "name" => name,
-         "direction" => direction,
-         "type" => type,
-         "width" => width
-       } = signal_spec) do
+  defp accessor_spec(
+         %{
+           "name" => name,
+           "direction" => direction,
+           "type" => type,
+           "width" => width
+         } = signal_spec
+       ) do
     role = Map.get(signal_spec, "role") || %{"kind" => "data"}
     role_kind = Map.get(role, "kind", "data")
 
