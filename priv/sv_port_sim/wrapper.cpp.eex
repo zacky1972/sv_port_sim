@@ -10,6 +10,10 @@
 #include <sstream>
 #include <string>
 
+#include "<%= verilated_class %>.h"
+#include "verilated.h"
+<%= trace_include %>
+
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -1306,15 +1310,18 @@ EncodedValue encode_signal(std::uint64_t value, int width) {
   return encoded;
 }
 
+<%= trace_helpers %>
+
 class SimulationSession {
  public:
   SimulationSession(int argc, char** argv)
       : contextp_(new VerilatedContext),
         top_(nullptr),
         finalized_(false),
-        cycle_(0) {
+        cycle_(0)<%= trace_ctor_init %> {
     contextp_->commandArgs(argc, argv);
     top_.reset(new <%= verilated_class %>{contextp_.get()});
+    <%= trace_ctor_body %>
   }
 
   ~SimulationSession() {
@@ -1323,6 +1330,7 @@ class SimulationSession {
 
   void eval() {
     top_->eval();
+    <%= trace_dump_call %>
   }
 
   template <typename SetClock>
@@ -1332,14 +1340,17 @@ class SimulationSession {
 
     set_clock(inactive);
     top_->eval();
+    <%= trace_dump_call %>
 
     contextp_->timeInc(1);
     set_clock(active);
     top_->eval();
+    <%= trace_dump_call %>
 
     contextp_->timeInc(1);
     set_clock(inactive);
     top_->eval();
+    <%= trace_dump_call %>
 
     ++cycle_;
   }
@@ -1347,6 +1358,8 @@ class SimulationSession {
   void final() {
     if (!finalized_) {
       top_->final();
+      <%= trace_dump_call %>
+      <%= trace_close_call %>
       finalized_ = true;
     }
   }
@@ -1372,6 +1385,8 @@ class SimulationSession {
   std::unique_ptr<<%= verilated_class %>> top_;
   bool finalized_;
   std::uint64_t cycle_;
+
+  <%= trace_members %>
 };
 
 AccessorResult poke_signal(SimulationSession& session,

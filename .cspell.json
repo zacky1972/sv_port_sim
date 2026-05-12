@@ -74,6 +74,8 @@
     "nullptr",
     "cstddef",
     "svps",
-    "decltype"
+    "decltype",
+    "rfind",
+    "tracep"
   ]
 }
