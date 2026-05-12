@@ -20,6 +20,8 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
     assert source =~ "<%= signal_specs_json %>"
     assert source =~ "<%= poke_cases %>"
     assert source =~ "<%= peek_cases %>"
+    assert source =~ "<%= reset_cases %>"
+    assert source =~ "<%= default_reset_case %>"
 
     refute String.contains?(source, old_placeholder("VERILATED_CLASS"))
     refute String.contains?(source, old_placeholder("TOP_MODULE"))
@@ -64,6 +66,37 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
     refute source =~ "@@DEFAULT_CLOCK_CASE@@"
   end
 
+  test "reset-aware template context is generated and rendered for reset" do
+    specs = [
+      SignalSpec.clock("clk"),
+      SignalSpec.reset("rst_n", active: "low")
+    ]
+
+    assert {:ok, generated_context} = Accessor.context(specs)
+
+    assert Map.has_key?(generated_context, :reset_cases)
+    assert Map.has_key?(generated_context, :default_reset_case)
+
+    assert generated_context.reset_cases =~ ~s(reset == "rst_n")
+    assert generated_context.reset_cases =~ "const int active_level = 0;"
+    assert generated_context.reset_cases =~ "const int inactive_level = 1;"
+    assert generated_context.default_reset_case =~ ~s(reset = "rst_n";)
+
+    template_context = %{
+      signal_specs_json: "[]",
+      poke_cases: "",
+      peek_cases: "",
+      clock_cases: ~S(// fixture clock dispatch),
+      default_clock_case: ~S(return false;),
+      reset_cases: ~S(// fixture reset dispatch),
+      default_reset_case: ~S(return false;)
+    }
+
+    source = Template.render("Counter", template_context)
+
+    assert source =~ "// fixture reset dispatch"
+  end
+
   describe "render/2" do
     test "matches Wrapper.source/1 for an empty accessor context" do
       assert {:ok, context} = Accessor.context([])
@@ -98,6 +131,11 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
       assert source =~ "write_frame(result.payload)"
       assert source =~ ~s(op == "tick" || op == "cycle")
       assert source =~ ~s(op == "reset")
+      assert source =~ "ResetRequest"
+      assert source =~ "ResetResult"
+      assert source =~ "drive_reset_signal"
+      assert source =~ "handle_reset"
+      refute source =~ "operation requires generated reset sequencing"
     end
 
     test "replaces every template placeholder" do

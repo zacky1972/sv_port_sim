@@ -116,18 +116,39 @@ defmodule SvPortSimFakeProtocolSim do
   end
 
   defp handle_request(%{"op" => "reset", "body" => body} = request, state) do
-    cycles = positive_integer(Map.get(body, "cycles"), 1)
-    signal = Map.get(body, "reset")
+    cycles = Map.get(body, "cycles", 1)
+    reset = Map.get(body, "reset", "rst_n")
+    clock = Map.get(body, "clock", "clk")
 
-    reset =
-      if is_binary(signal) do
-        %{"cycles" => cycles, "signal" => signal}
-      else
-        %{"cycles" => cycles}
-      end
+    cond do
+      not is_integer(cycles) or cycles < 1 ->
+        write_error(request, "invalid_value", "reset cycles must be positive", %{"field" => "cycles"}, state)
 
-    state = %{state | cycle: state.cycle + cycles, signals: %{"count" => encoded_counter(0)}}
-    write_response(request, "response", %{"cycle" => state.cycle, "reset" => reset}, state)
+      reset != "rst_n" and reset != "rst" ->
+        write_error(request, "invalid_signal", "unknown reset", %{"signal" => reset}, state)
+
+      clock != "clk" ->
+        write_error(request, "invalid_signal", "unknown clock", %{"clock" => clock}, state)
+
+      true ->
+        state = %{
+          state
+          | cycle: state.cycle + cycles,
+            signals: Map.put(state.signals, "count", encoded_counter(0))
+        }
+
+        body = %{
+          "reset" => reset,
+          "clock" => clock,
+          "cycles" => cycles,
+          "active" => 0,
+          "inactive" => 1,
+          "final" => 1,
+          "cycle" => state.cycle
+        }
+
+        write_response(request, "response", body, state)
+    end
   end
 
   defp handle_request(%{"op" => "poke", "body" => body} = request, state) do

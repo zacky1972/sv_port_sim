@@ -192,6 +192,31 @@ defmodule SvPortSim.Transport.PortFixtureTest do
              ["reset", "poke", "tick", "cycle", "peek", "finish?", "stop"]
   end
 
+  test "counter can be reset, advanced, and queried in one process" do
+    {:ok, sim} = start_supervised_sim_with_fake_fixture()
+
+    assert {:ok, _} = SvPortSim.poke(sim, "enable", %{bits: "1", width: 1})
+    assert {:ok, _} = SvPortSim.tick(sim, cycles: 3)
+
+    assert {:ok, %{"value" => %{"bits" => before_reset}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert before_reset != "0000"
+
+    assert {:ok, %{"reset" => "rst_n", "cycles" => 2, "final" => 1}} =
+             SvPortSim.reset(sim, cycles: 2, reset: "rst_n", clock: "clk")
+
+    assert {:ok, %{"value" => %{"bits" => "0000"}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert {:ok, _} = SvPortSim.tick(sim, cycles: 1)
+
+    assert {:ok, %{"value" => %{"bits" => after_tick}}} =
+             SvPortSim.peek(sim, "count")
+
+    assert after_tick != "0000"
+  end
+
   defp start_sim(trace) do
     SvPortSim.start_link(
       executable: fixture_executable(),

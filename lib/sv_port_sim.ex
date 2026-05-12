@@ -182,7 +182,11 @@ defmodule SvPortSim do
   @type command_option :: {:timeout, timeout_ms()}
 
   @typedoc "Options accepted by `reset/2`."
-  @type reset_option :: command_option() | {:cycles, pos_integer()} | {:reset, signal()}
+  @type reset_option ::
+          command_option()
+          | {:cycles, pos_integer()}
+          | {:reset, signal()}
+          | {:clock, signal()}
 
   @typedoc "Options accepted by `tick/2`."
   @type tick_option :: command_option() | {:cycles, pos_integer()} | {:clock, signal()}
@@ -247,6 +251,7 @@ defmodule SvPortSim do
 
     * `:cycles` - number of reset cycles. Defaults to `1`.
     * `:reset` - reset signal name. Defaults to wrapper policy.
+    * `:clock` - clock signal name. Defaults to wrapper policy.
     * `:timeout` - per-request timeout.
   """
   @spec reset(instance(), [reset_option()]) :: api_result()
@@ -324,9 +329,10 @@ defmodule SvPortSim do
 
   defp build_reset_body(opts) do
     with {:ok, _opts} <- validate_keyword_options(opts),
-         {:ok, _opts} <- validate_allowed_options(opts, [:cycles, :reset, :timeout]),
-         {:ok, cycles} <- positive_integer_option(opts, :cycles, 1) do
-      optional_signal(%{"cycles" => cycles}, opts, :reset)
+         {:ok, _opts} <- validate_allowed_options(opts, [:cycles, :reset, :clock, :timeout]),
+         {:ok, cycles} <- positive_integer_option(opts, :cycles, 1),
+         {:ok, body} <- optional_signal(%{"cycles" => cycles}, opts, :reset) do
+      optional_signal(body, opts, :clock)
     end
   end
 
