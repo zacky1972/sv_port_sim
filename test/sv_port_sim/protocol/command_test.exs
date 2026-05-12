@@ -43,7 +43,7 @@ defmodule SvPortSim.Protocol.CommandTest do
   end
 
   test "command specs cover every MVP command with schemas and error paths" do
-    assert Command.command_names() == ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
+    assert Command.command_names() == ["metadata", "reset", "eval", "poke", "tick", "cycle", "peek", "finish?", "shutdown"]
     assert Enum.map(Command.command_specs(), & &1.name) == Command.command_names()
 
     for command <- Command.command_names() do
