@@ -186,6 +186,13 @@ std::string json_detail(const std::string& key, const std::string& value) {
   return "{" + json_quote(key) + ":" + json_quote(value) + "}";
 }
 
+std::string clock_detail(const std::string& clock) {
+  if (clock.empty()) {
+    return "{}";
+  }
+  return json_detail("clock", clock);
+}
+
 std::string signal_detail(const std::string& signal) {
   if (signal.empty()) {
     return "{}";
@@ -526,6 +533,61 @@ class JsonCursor {
   const std::string& text_;
   std::size_t pos_;
 };
+
+bool find_string_field(const std::string& object_json,
+                       const std::string& field_name,
+                       std::string& value,
+                       bool& found,
+                       std::string& error) {
+  found = false;
+  JsonCursor json(object_json);
+
+  if (!json.consume('{')) {
+    error = "body must be a JSON object";
+    return false;
+  }
+
+  if (json.consume('}')) {
+    return true;
+  }
+
+  while (true) {
+    std::string field;
+
+    if (!json.parse_string(field) || !json.consume(':')) {
+      error = "invalid JSON object field";
+      return false;
+    }
+
+    if (field == field_name) {
+      if (found || !json.parse_string(value) || value.empty()) {
+        error = "field must be a non-empty string: " + field_name;
+        return false;
+      }
+
+      found = true;
+    } else if (!json.skip_value()) {
+      error = "invalid JSON value";
+      return false;
+    }
+
+    if (json.consume('}')) {
+      break;
+    }
+
+    if (!json.consume(',')) {
+      error = "expected JSON object separator";
+      return false;
+    }
+  }
+
+  if (!json.at_end()) {
+    error = "trailing data after JSON object";
+    return false;
+  }
+
+  return true;
+}
 
 bool find_uint_field(const std::string& object_json,
                      const std::string& field_name,
@@ -1111,14 +1173,6 @@ class SimulationSession {
     top_->eval();
   }
 
-  void advance_cycles(std::uint64_t cycles) {
-    for (std::uint64_t cycle = 0; cycle < cycles; ++cycle) {
-      contextp_->timeInc(1);
-      top_->eval();
-      ++cycle_;
-    }
-  }
-
   template <typename SetClock>
   void tick_clock(SetClock set_clock, bool posedge) {
     const int inactive = posedge ? 0 : 1;
@@ -1285,18 +1339,35 @@ class CommandDispatcher {
 
   DispatchResult handle_cycles(const Request& request) {
     std::uint64_t cycles = 1;
+    std::string clock;
     DispatchResult validation_error;
 
     if (!parse_cycles(request, cycles, validation_error)) {
       return validation_error;
     }
 
-    session_.advance_cycles(cycles);
+    if (!parse_clock(request, clock, validation_error)) {
+      return validation_error;
+    }
+
+    for (std::uint64_t cycle = 0; cycle < cycles; ++cycle) {
+      const ClockResult tick = tick_clock(session_, clock);
+
+      if (!tick.ok) {
+        return error_response(request,
+                              tick.code,
+                              tick.message,
+                              clock_detail(tick.clock),
+                              false);
+      }
+    }
 
     std::ostringstream body;
-    body << "{\"cycles\":" << cycles
+    body << "{\"clock\":" << json_quote(clock)
+         << ",\"cycles\":" << cycles
          << ",\"time\":" << session_.time()
          << ",\"cycle\":" << session_.cycle() << "}";
+
     return respond(request, body.str());
   }
 
@@ -1365,6 +1436,33 @@ class CommandDispatcher {
     result.exit_code = 0;
     return result;
   }
+
+bool parse_clock(const Request& request,
+                 std::string& clock,
+                 DispatchResult& result) {
+  bool found = false;
+  std::string parse_error;
+
+  if (!find_string_field(request.body_json, "clock", clock, found, parse_error)) {
+    result = error_response(request,
+                            "invalid_signal",
+                            "invalid clock",
+                            json_detail("reason", parse_error),
+                            false);
+    return false;
+  }
+
+  if (!found && !default_clock(clock)) {
+    result = error_response(request,
+                            "invalid_signal",
+                            "clock is required",
+                            "{}",
+                            false);
+    return false;
+  }
+
+  return true;
+}
 
   bool parse_cycles(const Request& request, std::uint64_t& cycles, DispatchResult& result) {
     bool found = false;
