@@ -1318,7 +1318,7 @@ class SimulationSession {
       : contextp_(new VerilatedContext),
         top_(nullptr),
         finalized_(false),
-        cycle_(0) {
+        cycle_(0)<%= trace_ctor_init %> {
     contextp_->commandArgs(argc, argv);
     top_.reset(new <%= verilated_class %>{contextp_.get()});
     <%= trace_ctor_body %>

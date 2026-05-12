@@ -38,40 +38,31 @@ defmodule SvPortSim.Verilator.Wrapper.Trace do
     end
   end
 
-  defp disabled do
+  defp disabled() do
     %{
       enabled?: false,
       mode: false,
       include: "",
-      type: "",
-      default_path: "",
-      verilator_args: [],
       helpers: "",
       ctor_init: "",
       ctor_body: "",
       members: "",
       dump_call: "",
-      close_call: ""
+      close_call: "",
+      verilator_args: []
     }
   end
 
-  defp enabled(
-         %{
-           include: include,
-           type: type,
-           default_path: default_path,
-           verilator_args: verilator_args
-         } = opts
-       ) do
+  defp enabled(%{type: type} = opts) do
     %{
       enabled?: true,
       mode: opts.mode,
-      include: include,
+      include: opts.include,
       type: type,
-      default_path: default_path,
-      verilator_args: verilator_args,
-      helpers: helpers(default_path),
-      ctor_init: ", trace_enabled_(false)",
+      default_path: opts.default_path,
+      verilator_args: opts.verilator_args,
+      helpers: helpers(opts.default_path),
+      ctor_init: ",\n    trace_enabled_(false)",
       ctor_body: ctor_body(type),
       members: members(type),
       dump_call: "dump_trace();",

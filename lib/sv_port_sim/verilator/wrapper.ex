@@ -107,13 +107,13 @@ defmodule SvPortSim.Verilator.Wrapper do
   @spec interactive_source(term(), term()) :: {:ok, String.t()} | {:error, term()}
   def interactive_source(top_module, signal_specs), do: source(top_module, signal_specs)
 
-
   @doc """
   Explicit alias for `source/3` that documents interactive wrapper generation
   with generated signal accessors.
   """
   @spec interactive_source(term(), term(), keyword()) :: {:ok, String.t()} | {:error, term()}
-  def interactive_source(top_module, signal_specs, opts), do: source(top_module, signal_specs, opts)
+  def interactive_source(top_module, signal_specs, opts),
+    do: source(top_module, signal_specs, opts)
 
   @doc """
   Writes the generated interactive C++ wrapper source for `top_module` into

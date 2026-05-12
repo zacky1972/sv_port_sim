@@ -70,15 +70,16 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
     reset_cases = Map.get(context, :reset_cases, "")
     default_reset_case = Map.get(context, :default_reset_case, "return false;\n")
 
-    trace = Map.get(context, :trace, %{
-      include: "",
-      helpers: "",
-      ctor_init: "",
-      ctor_body: "",
-      members: "",
-      dump_call: "",
-      close_call: ""
-    })
+    trace =
+      Map.get(context, :trace, %{
+        include: "",
+        helpers: "",
+        ctor_init: "",
+        ctor_body: "",
+        members: "",
+        dump_call: "",
+        close_call: ""
+      })
 
     render_template(
       "V#{top_module}",
