@@ -71,6 +71,9 @@
     "cstdio",
     "isalpha",
     "isalnum",
-    "nullptr"
+    "nullptr",
+    "cstddef",
+    "svps",
+    "decltype"
   ]
 }

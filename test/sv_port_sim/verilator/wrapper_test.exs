@@ -1,7 +1,9 @@
 defmodule SvPortSim.Verilator.WrapperTest do
   use ExUnit.Case, async: true
 
+  alias SvPortSim.SignalSpec
   alias SvPortSim.Verilator.Wrapper
+
   doctest Wrapper
 
   test "filename/1 returns default wrapper filename" do
@@ -23,6 +25,10 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ "while (true)"
     assert source =~ "read_frame()"
     assert source =~ "write_frame(result.payload)"
+    assert source =~ "top_->eval();"
+    assert source =~ "top_->final();"
+    assert source =~ "while (true)"
+    assert source =~ ~s(op == "tick" || op == "cycle")
   end
 
   test "source/1 owns one persistent simulation session outside the command loop" do
@@ -67,7 +73,8 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ ~s(op == "stop" || op == "shutdown")
     assert source =~ "result.stop = true;"
     assert source =~ "result.exit_code = 0;"
-    assert source =~ ~S(\"status\":\"stopped\")
+    assert source =~ ~S|const char* status = request.op == "shutdown" ? "closing" : "stopped";|
+    assert source =~ ~S|body << "{\"status\":\"" << status|
   end
 
   test "source/1 includes EOF, fatal protocol, and malformed-request cleanup paths" do
@@ -113,6 +120,97 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert Wrapper.source("Counter/Bad") == {:error, {:invalid_top_module, "Counter/Bad"}}
   end
 
+  test "write/2 writes wrapper source to directory" do
+    dir =
+      Path.join([
+        System.tmp_dir!(),
+        "sv_port_sim_wrapper_test_#{System.unique_integer([:positive])}"
+      ])
+
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    assert {:ok, path} = Wrapper.write("Counter", dir)
+
+    assert path == Path.join(dir, "Counter_wrapper.cpp")
+    assert File.exists?(path)
+    assert File.read!(path) =~ ~s(#include "VCounter.h")
+  end
+
+  test "source/2 generates poke and peek dispatch from signal specs" do
+    specs = [
+      SignalSpec.data("enable", "input", "bit", 1),
+      SignalSpec.data("count", "output", "logic", 8),
+      SignalSpec.data("bus", "inout", "logic", 4)
+    ]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ "AccessorResult poke_signal(SimulationSession& session"
+
+    assert source =~ ~s|if (signal == "enable")|
+
+    assert source =~
+             "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
+
+    assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not readable");|
+
+    assert source =~ ~s|if (signal == "count")|
+    assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not writable");|
+
+    assert source =~
+             "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));"
+
+    assert source =~
+             "top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));"
+
+    assert source =~
+             "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));"
+  end
+
+  test "source/2 emits non-fatal invalid_signal and invalid_value result paths" do
+    specs = [SignalSpec.data("enable", "input", "bit", 1)]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ ~s(result.code = "invalid_signal";)
+    assert source =~ ~s(result.code = "invalid_value";)
+    assert source =~ ~s|return invalid_signal_accessor(signal, "unknown signal");|
+    assert source =~ ~s|return invalid_value_accessor(signal, "invalid encoded value");|
+    assert source =~ "valid_two_state_encoded_value(value, 1)"
+    assert source =~ "signal_detail(result.signal), false);"
+  end
+
+  test "source/2 maps unsupported native accessor widths to safe invalid_signal cases" do
+    specs = [SignalSpec.data("wide", "input", "logic", 65)]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ ~s|if (signal == "wide")|
+    assert source =~ "signal shape is not supported by generated accessors"
+    refute source =~ "top->wide ="
+  end
+
+  test "source/2 embeds normalized signal metadata for metadata command" do
+    specs = [SignalSpec.data("count", "output", "logic", 8)]
+
+    assert {:ok, source} = Wrapper.source("Counter", specs)
+
+    assert source =~ ~s(const char* kSignalSpecsJson = R"svps_json()
+    assert source =~ ~s("name":"count")
+    assert source =~ ~s("direction":"output")
+    assert source =~ ~s("width":8)
+  end
+
+  test "source/2 rejects invalid signal spec lists" do
+    specs = [
+      SignalSpec.data("enable", "input", "bit", 1),
+      SignalSpec.data("enable", "output", "logic", 1)
+    ]
+
+    assert Wrapper.source("Counter", specs) ==
+             {:error, {:invalid_signal_specs, {:duplicate_signal_names, ["enable"]}}}
+  end
+
   test "interactive_source/1 is an explicit alias for source/1" do
     assert Wrapper.interactive_source("Counter") == Wrapper.source("Counter")
   end
@@ -134,6 +232,24 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ ~s(#include "VCounter.h")
     assert source =~ "SimulationSession"
     assert source =~ "while (true)"
+  end
+
+  test "write/3 writes accessor-enabled wrapper source to directory" do
+    dir =
+      Path.join([
+        System.tmp_dir!(),
+        "sv_port_sim_wrapper_test_#{System.unique_integer([:positive])}"
+      ])
+
+    specs = [SignalSpec.data("enable", "input", "bit", 1)]
+
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    assert {:ok, path} = Wrapper.write("Counter", dir, specs)
+
+    assert path == Path.join(dir, "Counter_wrapper.cpp")
+    assert File.exists?(path)
+    assert File.read!(path) =~ "top->enable ="
   end
 
   defp occurrences(haystack, needle) do
