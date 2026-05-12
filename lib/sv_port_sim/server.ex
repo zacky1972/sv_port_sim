@@ -1,5 +1,64 @@
 defmodule SvPortSim.Server do
-  @moduledoc false
+  @moduledoc """
+  Internal `GenServer` implementation for a single Verilated simulator instance.
+
+  `SvPortSim.Server` owns exactly one `SvPortSim.Transport` state. It is the
+  process boundary between the public `SvPortSim` API and the simulator runtime:
+  callers submit already-normalized protocol operations, while the server assigns
+  request IDs, serializes access through `GenServer.call/3`, invokes the
+  transport, validates response envelopes, and closes the transport when the
+  instance terminates.
+
+  This module is intentionally lower-level than `SvPortSim`. It does not define
+  command-specific public APIs such as `reset`, `tick`, `poke`, or `peek`; those
+  belong to the facade. The facade is responsible for user-facing option and
+  command-body validation. `SvPortSim.Server` is responsible for runtime process
+  state and transport lifecycle management.
+
+  ## Lifecycle
+
+  `start_link/1` and `start/1` split standard `GenServer` start options from
+  simulator options. Simulator options are normalized into transport options and
+  passed to `c:SvPortSim.Transport.open/1` during `init/1`.
+
+  After a successful start, each call to `request/4` builds a protocol request
+  envelope and sends it to `c:SvPortSim.Transport.request/3`. Request IDs are
+  allocated monotonically from zero within a server process.
+
+  `stop/2` sends a terminal `"shutdown"` request. On a successful shutdown
+  response, the transport is closed and the server stops normally.
+
+  ## Timeouts
+
+  The server keeps one default runtime timeout in its state. `:default` uses that
+  configured value; an integer timeout or `:infinity` overrides it for a single
+  operation. `GenServer.call/3` itself uses `:infinity` for `:default`, because
+  the effective runtime timeout is passed to the transport.
+
+  ## Errors
+
+  Runtime errors are returned as canonical error bodies produced by
+  `SvPortSim.Protocol`. Non-fatal wrapper errors are returned to the caller and
+  keep the server alive. Fatal errors close the transport and stop the server.
+
+  Response envelopes are validated before their bodies are returned. Malformed
+  responses, mismatched response IDs, and mismatched operations are treated as
+  fatal `"malformed_output"` failures.
+
+  ## Transport ownership
+
+  The transport state is owned exclusively by this process. `close/1` is called
+  at most once by tracking the internal `closed?` flag; `terminate/2` also calls
+  the same close path so unexpected server termination still releases transport
+  resources when possible.
+
+  ## Intended use
+
+  This module is part of the implementation structure of the library. External
+  users should normally call `SvPortSim` instead. Tests may call this module
+  directly to exercise process lifecycle, timeout resolution, request ID
+  allocation, transport error handling, and shutdown semantics.
+  """
 
   use GenServer
 
@@ -21,14 +80,42 @@ defmodule SvPortSim.Server do
   @type error_body :: %{required(String.t()) => term()}
   @type timeout_override :: :default | timeout()
 
+  @doc """
+  Starts one simulator server and links it to the caller.
+
+  Standard `GenServer` start options, such as `:name`, are forwarded to
+  `GenServer.start_link/3`. Simulator options are used to configure the transport
+  and the server state.
+
+  Returns `{:ok, pid}`, `:ignore`, or `{:error, reason}`. Invalid options and
+  transport startup failures are returned as `{:error, reason}`.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) when is_list(opts), do: do_start(:start_link, opts)
   def start_link(opts), do: {:error, {:invalid_options, opts}}
 
+  @doc """
+  Starts one simulator server without linking it to the caller.
+
+  This has the same option handling as `start_link/1`, but delegates to
+  `GenServer.start/3` instead of `GenServer.start_link/3`.
+  """
   @spec start(keyword()) :: GenServer.on_start()
   def start(opts) when is_list(opts), do: do_start(:start, opts)
   def start(opts), do: {:error, {:invalid_options, opts}}
 
+  @doc """
+  Sends one already-normalized runtime operation to the simulator transport.
+
+  `op` is the protocol operation name and `body` is the JSON-compatible request
+  body. The server wraps them in a request envelope, assigns the next request ID,
+  resolves the effective timeout, calls `c:SvPortSim.Transport.request/3`, and
+  validates the response envelope.
+
+  Returns `{:ok, body}` for a successful wrapper response or
+  `{:error, error_body}` for runtime failures. Non-fatal errors keep the server
+  alive. Fatal errors close the transport and stop the server.
+  """
   @spec request(instance(), String.t(), request_body(), timeout_override()) ::
           {:ok, response_body()} | {:error, error_body()}
   def request(instance, op, body, timeout_override) do
@@ -50,6 +137,14 @@ defmodule SvPortSim.Server do
     end
   end
 
+  @doc """
+  Sends the terminal `"shutdown"` operation and stops the simulator server.
+
+  A successful shutdown closes the transport and stops the process normally,
+  returning `:ok` to the caller. A non-fatal shutdown error is returned and the
+  server remains alive. A fatal shutdown error closes the transport, stops the
+  server, and returns `{:error, error_body}`.
+  """
   @spec stop(instance(), timeout_override()) :: :ok | {:error, error_body()}
   def stop(instance, timeout_override) do
     try do
