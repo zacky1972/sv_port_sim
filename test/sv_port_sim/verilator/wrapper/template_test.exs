@@ -6,6 +6,35 @@ defmodule SvPortSim.Verilator.Wrapper.TemplateTest do
   alias SvPortSim.Verilator.Wrapper.Accessor
   alias SvPortSim.Verilator.Wrapper.Template
 
+  test "clock-aware template context is generated and rendered for tick and cycle" do
+    specs = [
+      SignalSpec.clock("clk"),
+      SignalSpec.clock("clk_n", edge: "negedge")
+    ]
+
+    assert {:ok, generated_context} = Accessor.context(specs)
+    assert Map.has_key?(generated_context, :clock_cases)
+    assert Map.has_key?(generated_context, :default_clock_case)
+    assert generated_context.clock_cases =~ ~s(clock == "clk")
+    assert generated_context.clock_cases =~ ~s(clock == "clk_n")
+
+    template_context = %{
+      signal_specs_json: "[]",
+      poke_cases: "",
+      peek_cases: "",
+      clock_cases: ~S(// fixture clock dispatch),
+      default_clock_case: ~S(// fixture default clock dispatch)
+    }
+
+    source = Template.render("Counter", template_context)
+
+    assert source =~ "// fixture clock dispatch"
+    assert source =~ "// fixture default clock dispatch"
+    refute source =~ "@@CLOCK_CASES@@"
+    refute source =~ "@@DEFAULT_CLOCK_CASE@@"
+  end
+
+
   describe "render/2" do
     test "matches Wrapper.source/1 for an empty accessor context" do
       assert {:ok, context} = Accessor.context([])

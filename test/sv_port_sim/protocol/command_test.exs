@@ -8,6 +8,40 @@ defmodule SvPortSim.Protocol.CommandTest do
   @encoded_one %{"bits" => "1", "width" => 1}
   @encoded_count %{"bits" => "0010", "width" => 4}
 
+  test "eval, cycle, and finish? have command and successful response schemas" do
+    expected_commands = [
+      "metadata",
+      "reset",
+      "eval",
+      "poke",
+      "tick",
+      "cycle",
+      "peek",
+      "finish?",
+      "shutdown"
+    ]
+
+    assert Command.command_names() == expected_commands
+    assert Enum.map(Command.command_specs(), & &1.name) == expected_commands
+
+    cases = [
+      {"eval", %{}, %{"time" => 0, "cycle" => 0}},
+      {"cycle", %{"clock" => "clk", "cycles" => 5},
+       %{"clock" => "clk", "cycles" => 5, "time" => 10, "cycle" => 5}},
+      {"finish?", %{}, %{"finished" => false, "time" => 10, "cycle" => 5}}
+    ]
+
+    for {{op, request_body, response_body}, id} <- Enum.with_index(cases, 1) do
+      assert {:ok, request} = Command.request(op, id, request_body)
+      assert Command.validate_request(request) == :ok
+
+      assert {:ok, response} = Command.ok_response(request, response_body)
+      assert response["op"] == op
+      assert response["body"] == response_body
+      assert Command.validate_response(response) == :ok
+    end
+  end
+
   test "command specs cover every MVP command with schemas and error paths" do
     assert Command.command_names() == ["metadata", "reset", "poke", "tick", "peek", "shutdown"]
     assert Enum.map(Command.command_specs(), & &1.name) == Command.command_names()
