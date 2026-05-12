@@ -38,7 +38,14 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
       :clock_cases,
       :default_clock_case,
       :reset_cases,
-      :default_reset_case
+      :default_reset_case,
+      :trace_include,
+      :trace_helpers,
+      :trace_ctor_init,
+      :trace_ctor_body,
+      :trace_members,
+      :trace_dump_call,
+      :trace_close_call
     ],
     trim: false
   )
@@ -63,6 +70,16 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
     reset_cases = Map.get(context, :reset_cases, "")
     default_reset_case = Map.get(context, :default_reset_case, "return false;\n")
 
+    trace = Map.get(context, :trace, %{
+      include: "",
+      helpers: "",
+      ctor_init: "",
+      ctor_body: "",
+      members: "",
+      dump_call: "",
+      close_call: ""
+    })
+
     render_template(
       "V#{top_module}",
       JsonLiteral.cpp_string(top_module),
@@ -72,7 +89,14 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
       clock_cases,
       default_clock_case,
       reset_cases,
-      default_reset_case
+      default_reset_case,
+      trace.include,
+      trace.helpers,
+      trace.ctor_init,
+      trace.ctor_body,
+      trace.members,
+      trace.dump_call,
+      trace.close_call
     )
   end
 end
