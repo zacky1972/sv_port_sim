@@ -25,8 +25,8 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ "while (true)"
     assert source =~ "read_frame()"
     assert source =~ "write_frame(result.payload)"
-    assert source =~ "top->eval();"
-    assert source =~ "top->final();"
+    assert source =~ "top_->eval();"
+    assert source =~ "top_->final();"
     assert source =~ "while (true)"
     assert source =~ ~s(op == "tick" || op == "cycle")
   end
