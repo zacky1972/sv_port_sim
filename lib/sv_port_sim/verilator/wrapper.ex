@@ -25,10 +25,11 @@ defmodule SvPortSim.Verilator.Wrapper do
   alias SvPortSim.Verilator.Wrapper.Accessor
   alias SvPortSim.Verilator.Wrapper.Template
 
-  @sv_identifier ~r/\A[A-Za-z_][A-Za-z0-9_$]*\z/
+  alias SvPortSim.Verilator.Wrapper.Validator
+
   @spec filename(term()) :: {:ok, String.t()} | {:error, term()}
   def filename(top_module) when is_binary(top_module) do
-    with :ok <- validate_top_module(top_module) do
+    with :ok <- Validator.top_module(top_module) do
       {:ok, "#{top_module}_wrapper.cpp"}
     end
   end
@@ -68,7 +69,7 @@ defmodule SvPortSim.Verilator.Wrapper do
   """
   @spec source(term(), term()) :: {:ok, String.t()} | {:error, term()}
   def source(top_module, signal_specs) when is_binary(top_module) and is_list(signal_specs) do
-    with :ok <- validate_top_module(top_module),
+    with :ok <- Validator.top_module(top_module),
          {:ok, context} <- Accessor.context(signal_specs) do
       {:ok, wrapper_source(top_module, context)}
     end
@@ -137,12 +138,4 @@ defmodule SvPortSim.Verilator.Wrapper do
   end
 
   defp wrapper_source(top_module, context), do: Template.render(top_module, context)
-
-  defp validate_top_module(top_module) do
-    if Regex.match?(@sv_identifier, top_module) do
-      :ok
-    else
-      {:error, {:invalid_top_module, top_module}}
-    end
-  end
 end
