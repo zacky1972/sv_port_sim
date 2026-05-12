@@ -65,6 +65,8 @@ Elixir opens the wrapper port with the options returned by `SvPortSim.Protocol.p
 
 With `{:packet, 4}`, the BEAM adds and strips the length prefix for Elixir. The external wrapper must read and write the four-byte big-endian length prefix explicitly.
 
+The wrapper's stdin/stdout protocol is byte-oriented, not text-oriented. Implementations must preserve every byte of both the four-byte length prefix and the JSON payload. Avoid text or Unicode-transcoding output APIs for framed responses; for example, an Elixir fixture should use raw binary file handles such as `:file.open('/dev/stdout', [:write, :raw, :binary])` and `:file.write/2` rather than writing framed bytes through text stdio helpers. If a length-prefix byte such as `0x93` is transcoded to `0xC2 0x93`, the BEAM packet decoder will wait for the wrong payload length and the request will time out.
+
 Every payload is an envelope with string keys:
 
 ```json
