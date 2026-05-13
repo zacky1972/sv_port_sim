@@ -26,7 +26,7 @@ defmodule SvPortSim.Verilator.Docker do
   They only stage existing files and invoke Verilator through Docker.
   """
 
-  alias SvPortSim.Docker, as: DockerProbe
+  alias DockerAvailability, as: DockerProbe
 
   @app :sv_port_sim
   @default_image "verilator/verilator:latest"
@@ -82,7 +82,7 @@ defmodule SvPortSim.Verilator.Docker do
       `default_work_dir(top_module)`. The directory is expanded before use.
 
     * `:docker` - Docker executable path. When omitted, the executable is resolved
-      with `SvPortSim.Docker.executable/0`.
+      with `DockerAvailability.executable/0`.
 
     * `:check_docker` - Whether to check Docker daemon reachability before
       preparing the workspace and running Verilator. Defaults to `true`.

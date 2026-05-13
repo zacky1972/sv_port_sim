@@ -81,6 +81,7 @@ defmodule SvPortSim.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:docker_availability, "~> 1.0"},
       {:nstandard, "~> 0.3"},
       {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
