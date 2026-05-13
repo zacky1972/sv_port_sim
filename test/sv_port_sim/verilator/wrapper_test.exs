@@ -426,6 +426,136 @@ defmodule SvPortSim.Verilator.WrapperTest do
              Wrapper.source("Counter", [], trace: :saif)
   end
 
+  describe "interactive wrapper source generation" do
+    test "generates required includes, class names, persistent model, and command loop" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert source =~ ~s(#include "VCounter.h")
+      assert source =~ ~s(#include "verilated.h")
+      assert source =~ "std::unique_ptr<VerilatedContext> contextp_"
+      assert source =~ "std::unique_ptr<VCounter> top_"
+      assert source =~ "new VCounter{contextp_.get()}"
+
+      assert source =~ "class SimulationSession"
+      assert source =~ "SimulationSession session(argc, argv);"
+      assert source =~ "CommandDispatcher dispatcher(session);"
+      assert source =~ "explicit CommandDispatcher(SimulationSession& session)"
+
+      assert source =~ "while (true)"
+      assert source =~ "read_frame()"
+      assert source =~ "write_frame(result.payload)"
+
+      assert occurrences(source, "new VerilatedContext") == 1
+      assert occurrences(source, "new VCounter{contextp_.get()}") == 1
+    end
+
+    test "fails if wrapper regresses to one-shot eval/final behavior" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      refute source =~ "top->eval();"
+      refute source =~ "top->final();"
+      refute source =~ "new VCounter{contextp}"
+    end
+
+    test "generates protocol framing, request parsing, response envelopes, and cleanup paths" do
+      assert {:ok, source} = Wrapper.source("Counter")
+
+      assert source =~ "constexpr std::uint32_t kMaxPayloadSize = 1024 * 1024;"
+      assert source =~ "std::cin.read(reinterpret_cast<char*>(header), 4);"
+      assert source =~ "static_cast<std::uint32_t>(header[0]) << 24"
+      assert source =~ "std::cout.write(reinterpret_cast<const char*>(header), 4);"
+      assert source =~ "std::cout.flush();"
+
+      assert source =~ "bool parse_request(const std::string& payload, Request& request"
+      assert source =~ ~S(\"kind\":\"response\")
+      assert source =~ ~S(\"kind\":\"error\")
+      assert source =~ ~S(\"fatal\":)
+
+      assert source =~ "FrameRead::eof"
+      assert source =~ "FrameRead::fatal"
+      assert source =~ ~s("protocol_error")
+
+      assert source =~ "void final()"
+      assert source =~ "if (!finalized_)"
+      assert source =~ "int finish_session(SimulationSession& session, int exit_code)"
+      assert occurrences(source, "top_->final();") == 1
+    end
+
+    test "rejects invalid top-module input" do
+      assert Wrapper.filename("../Counter") ==
+               {:error, {:invalid_top_module, "../Counter"}}
+
+      assert Wrapper.source("Counter/Bad") ==
+               {:error, {:invalid_top_module, "Counter/Bad"}}
+
+      assert Wrapper.source(:counter) ==
+               {:error, {:invalid_top_module, :counter}}
+    end
+  end
+
+  describe "accessor generation from signal specs" do
+    test "generates readable and writable signal accessors" do
+      specs = [
+        SignalSpec.data("enable", "input", "bit", 1),
+        SignalSpec.data("count", "output", "logic", 8),
+        SignalSpec.data("bus", "inout", "logic", 4)
+      ]
+
+      assert {:ok, source} = Wrapper.source("Counter", specs)
+
+      assert source =~ "AccessorResult poke_signal(SimulationSession& session"
+      assert source =~ "AccessorResult peek_signal(SimulationSession& session"
+
+      assert source =~ ~s|if (signal == "enable")|
+
+      assert source =~
+               "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
+
+      assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not readable");|
+
+      assert source =~ ~s|if (signal == "count")|
+      assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not writable");|
+
+      assert source =~
+               "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));"
+
+      assert source =~ ~s|if (signal == "bus")|
+
+      assert source =~
+               "top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));"
+
+      assert source =~
+               "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));"
+    end
+
+    test "emits non-fatal invalid_signal and invalid_value paths" do
+      specs = [SignalSpec.data("enable", "input", "bit", 1)]
+
+      assert {:ok, source} = Wrapper.source("Counter", specs)
+
+      assert source =~ ~s(result.code = "invalid_signal";)
+      assert source =~ ~s(result.code = "invalid_value";)
+      assert source =~ ~s|return invalid_signal_accessor(signal, "unknown signal");|
+      assert source =~ ~s|return invalid_value_accessor(signal, "invalid encoded value");|
+      assert source =~ "valid_two_state_encoded_value(value, 1)"
+      assert source =~ "signal_detail(result.signal), false);"
+    end
+
+    test "rejects invalid signal spec lists" do
+      specs = [
+        SignalSpec.data("enable", "input", "bit", 1),
+        SignalSpec.data("enable", "output", "logic", 1)
+      ]
+
+      assert Wrapper.source("Counter", specs) ==
+               {:error, {:invalid_signal_specs, {:duplicate_signal_names, ["enable"]}}}
+    end
+  end
+
+  defp occurrences(haystack, needle) do
+    length(String.split(haystack, needle)) - 1
+  end
+
   defp accessor_fixture_specs do
     [
       SignalSpec.data("enable", "input", "bit", 1),
@@ -458,9 +588,5 @@ defmodule SvPortSim.Verilator.WrapperTest do
     |> String.replace(~r/\s*([{}();,])\s*/, "\\1")
     |> String.replace(~r/\s*(==|=|->|::|<|>)\s*/, "\\1")
     |> String.trim()
-  end
-
-  defp occurrences(haystack, needle) do
-    length(String.split(haystack, needle)) - 1
   end
 end
