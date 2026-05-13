@@ -1,0 +1,41 @@
+[
+  {
+    "name": "clk",
+    "direction": "input",
+    "type": "bit",
+    "width": 1,
+    "signed": false,
+    "packed": {"kind": "scalar", "dimensions": []},
+    "role": {"kind": "clock", "edge": "posedge"}
+  },
+  {
+    "name": "rst_n",
+    "direction": "input",
+    "type": "bit",
+    "width": 1,
+    "signed": false,
+    "packed": {"kind": "scalar", "dimensions": []},
+    "role": {"kind": "reset", "active": "low"}
+  },
+  {
+    "name": "enable",
+    "direction": "input",
+    "type": "bit",
+    "width": 1,
+    "signed": false,
+    "packed": {"kind": "scalar", "dimensions": []},
+    "role": {"kind": "data"}
+  },
+  {
+    "name": "count",
+    "direction": "output",
+    "type": "logic",
+    "width": 8,
+    "signed": false,
+    "packed": {
+      "kind": "packed_vector",
+      "dimensions": [{"left": 7, "right": 0}]
+    },
+    "role": {"kind": "data"}
+  }
+]
