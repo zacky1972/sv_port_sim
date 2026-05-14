@@ -17,11 +17,15 @@ defmodule SvPortSim.Transport.Port do
   def open(opts) do
     executable = Keyword.get(opts, :executable)
     args = Keyword.get(opts, :args, [])
+    codec = Keyword.get(opts, :codec)
 
     with :ok <- validate_executable(executable),
-         :ok <- validate_args(args) do
+         :ok <- validate_args(args),
+         :ok <- validate_codec(codec) do
       port_options = Protocol.port_options() ++ [args: args]
-      {:ok, %{port: Port.open({:spawn_executable, executable}, port_options)}}
+
+      state = %{port: Port.open({:spawn_executable, executable}, port_options)}
+      {:ok, maybe_put_codec(state, codec)}
     end
   rescue
     exception -> {:error, {:port_open_failed, Exception.message(exception)}}
@@ -31,7 +35,7 @@ defmodule SvPortSim.Transport.Port do
 
   @impl true
   def request(request, %{port: port} = state, timeout) do
-    with {:ok, payload} <- Protocol.encode_payload(request),
+    with {:ok, payload} <- encode_request(request, state),
          true <- Port.command(port, payload) do
       receive_response(port, request, state, timeout)
     else
@@ -73,10 +77,23 @@ defmodule SvPortSim.Transport.Port do
 
   defp validate_args(args), do: {:error, {:invalid_args, args}}
 
-  defp receive_response(port, _request, state, :infinity) do
+  defp validate_codec(nil), do: :ok
+  defp validate_codec(codec) when is_atom(codec), do: :ok
+  defp validate_codec(codec), do: {:error, {:invalid_codec, codec}}
+
+  defp maybe_put_codec(state, nil), do: state
+  defp maybe_put_codec(state, codec), do: Map.put(state, :codec, codec)
+
+  defp encode_request(request, %{codec: codec}) do
+    codec.encode_request(request["id"], request["op"], request["body"])
+  end
+
+  defp encode_request(request, _state), do: Protocol.encode_payload(request)
+
+  defp receive_response(port, request, state, :infinity) do
     receive do
       {^port, {:data, payload}} ->
-        decode_response(payload, state)
+        decode_response(payload, request, state)
 
       {^port, {:exit_status, status}} ->
         runtime_failure({:exit_status, status}, state)
@@ -89,7 +106,7 @@ defmodule SvPortSim.Transport.Port do
   defp receive_response(port, request, state, timeout) do
     receive do
       {^port, {:data, payload}} ->
-        decode_response(payload, state)
+        decode_response(payload, request, state)
 
       {^port, {:exit_status, status}} ->
         runtime_failure({:exit_status, status}, state)
@@ -103,7 +120,23 @@ defmodule SvPortSim.Transport.Port do
     end
   end
 
-  defp decode_response(payload, state) do
+  defp decode_response(payload, request, %{codec: codec} = state) do
+    case codec.decode_response(payload, request["id"], request["op"]) do
+      {:ok, %{"kind" => kind} = response} when kind in ["response", "error"] ->
+        {:ok, response, state}
+
+      {:ok, body} when is_map(body) ->
+        {:ok, response_envelope(request, body), state}
+
+      {:error, error_body} when is_map(error_body) ->
+        {:error, error_body, state}
+
+      {:error, reason} ->
+        runtime_failure(:malformed_output, %{"reason" => inspect(reason)}, state)
+    end
+  end
+
+  defp decode_response(payload, _request, state) do
     case Protocol.decode_payload(payload) do
       {:ok, response} ->
         {:ok, response, state}
@@ -111,6 +144,16 @@ defmodule SvPortSim.Transport.Port do
       {:error, reason} ->
         runtime_failure(:malformed_output, %{"reason" => inspect(reason)}, state)
     end
+  end
+
+  defp response_envelope(request, body) do
+    %{
+      "v" => Protocol.version(),
+      "id" => request["id"],
+      "kind" => "response",
+      "op" => request["op"],
+      "body" => body
+    }
   end
 
   defp runtime_failure(reason, state), do: runtime_failure(reason, %{}, state)
