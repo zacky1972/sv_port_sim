@@ -224,8 +224,7 @@ defmodule SvPortSim.ServerTest do
 
       operations = [
         {"reset", %{"cycles" => 2, "reset" => "rst_n", "clock" => "clk"}},
-        {"poke",
-         %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}}},
+        {"poke", %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}}},
         {"peek", %{"signal" => "count"}},
         {"eval", %{}},
         {"tick", %{"cycles" => 3, "clock" => "clk"}},

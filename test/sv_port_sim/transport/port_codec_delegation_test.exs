@@ -41,7 +41,8 @@ defmodule SvPortSim.Transport.PortCodecDelegationTest.RecordingCodec do
          expected_id,
          expected_op
        )
-       when id == expected_id and op == expected_op and kind in ["response", "error"] and is_map(body) do
+       when id == expected_id and op == expected_op and kind in ["response", "error"] and
+              is_map(body) do
     :ok
   end
 

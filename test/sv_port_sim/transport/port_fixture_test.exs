@@ -249,12 +249,20 @@ defmodule SvPortSim.Transport.PortFixtureTest do
                   %{"op" => "eval", "body" => %{"settled" => true, "cycle" => 3}},
                   %{
                     "op" => "peek",
-                    "body" => %{"signal" => "count", "value" => %{"bits" => "0010", "width" => 4}, "cycle" => 3}
+                    "body" => %{
+                      "signal" => "count",
+                      "value" => %{"bits" => "0010", "width" => 4},
+                      "cycle" => 3
+                    }
                   }
                 ]
               }
             }, state} =
-             PortTransport.request(request(3, "transaction", transaction), state, @request_timeout)
+             PortTransport.request(
+               request(3, "transaction", transaction),
+               state,
+               @request_timeout
+             )
 
     assert {:ok, %{"op" => "stop", "body" => %{"status" => "closing"}}, _state} =
              PortTransport.request(request(4, "stop", %{}), state, @request_timeout)
