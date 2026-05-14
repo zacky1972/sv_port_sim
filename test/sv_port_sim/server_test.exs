@@ -161,8 +161,10 @@ defmodule SvPortSim.ServerTest.BlockingTransport do
   def request(request, state, timeout) do
     send(state.notify, {:blocking_transport_request, self(), request, timeout})
 
+    request_id = request["id"]
+
     receive do
-      {:release_request, id} when id == request["id"] ->
+      {:release_request, ^request_id} ->
         {:ok, response(request, request["body"]), state}
     after
       wait_timeout(timeout) ->
@@ -665,8 +667,8 @@ defmodule SvPortSim.ServerTest do
       first_request =
         Task.async(fn -> Server.request(sim, "tick", %{"cycles" => 1}, :default) end)
 
-      assert_receive {:blocking_transport_request, transport_pid,
-                      %{"id" => 0, "op" => "tick"}, 5_000}
+      assert_receive {:blocking_transport_request, transport_pid, %{"id" => 0, "op" => "tick"},
+                      5_000}
 
       try do
         state = get_state_or_flunk(sim, 50)
@@ -734,7 +736,9 @@ defmodule SvPortSim.ServerTest do
         value
 
       :error ->
-        flunk("expected instance state to include one of #{inspect(fields)}, got keys: #{inspect(state_keys(state))}")
+        flunk(
+          "expected instance state to include one of #{inspect(fields)}, got keys: #{inspect(state_keys(state))}"
+        )
     end
   end
 
@@ -751,7 +755,9 @@ defmodule SvPortSim.ServerTest do
         value
 
       :error ->
-        flunk("expected pending request to expose #{inspect(field)}, got: #{inspect(pending_request)}")
+        flunk(
+          "expected pending request to expose #{inspect(field)}, got: #{inspect(pending_request)}"
+        )
     end
   end
 
@@ -774,7 +780,9 @@ defmodule SvPortSim.ServerTest do
     :sys.get_state(pid, timeout)
   catch
     :exit, reason ->
-      flunk("expected instance state to be observable while a request is pending, got #{inspect(reason)}")
+      flunk(
+        "expected instance state to be observable while a request is pending, got #{inspect(reason)}"
+      )
   end
 
   defp stop_blocking_server(sim) do
