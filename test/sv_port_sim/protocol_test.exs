@@ -56,6 +56,105 @@ defmodule SvPortSim.ProtocolTest do
 
       assert Protocol.encode_payload(message) == {:error, {:invalid_kind, "command"}}
     end
+
+    test "round-trips MVP simulator request envelopes used by the port codec" do
+      operations = [
+        {"reset", %{"cycles" => 2, "reset" => "rst_n", "clock" => "clk"}},
+        {"poke", %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}}},
+        {"peek", %{"signal" => "count"}},
+        {"eval", %{}},
+        {"tick", %{"cycles" => 3, "clock" => "clk"}},
+        {"cycle", %{"cycles" => 4, "clock" => "clk"}},
+        {"transaction",
+         %{
+           "steps" => [
+             %{
+               "op" => "poke",
+               "body" => %{
+                 "signal" => "enable",
+                 "value" => %{"bits" => "1", "width" => 1}
+               }
+             },
+             %{"op" => "eval", "body" => %{}},
+             %{"op" => "peek", "body" => %{"signal" => "count"}}
+           ]
+         }},
+        {"shutdown", %{}}
+      ]
+
+      for {{op, body}, id} <- Enum.with_index(operations) do
+        envelope = %{
+          "v" => Protocol.version(),
+          "id" => id,
+          "kind" => "request",
+          "op" => op,
+          "body" => body
+        }
+
+        assert {:ok, payload} = Protocol.encode_payload(envelope)
+        assert {:ok, ^envelope} = Protocol.decode_payload(payload)
+      end
+    end
+  end
+
+  describe "runtime return mapping" do
+    test "maps successful and error response envelopes to public runtime result shapes" do
+      response_body = %{"value" => %{"bits" => "1", "width" => 1}}
+
+      assert Protocol.to_elixir_return(%{
+               "v" => Protocol.version(),
+               "id" => 10,
+               "kind" => "response",
+               "op" => "peek",
+               "body" => response_body
+             }) == {:ok, response_body}
+
+      error_body = %{
+        "code" => "invalid_signal",
+        "message" => "unknown signal",
+        "details" => %{"signal" => "missing"},
+        "fatal" => false
+      }
+
+      assert Protocol.to_elixir_return(%{
+               "v" => Protocol.version(),
+               "id" => 11,
+               "kind" => "error",
+               "op" => "peek",
+               "body" => error_body
+             }) == {:error, error_body}
+    end
+
+    test "maps malformed decoded response envelopes to fatal malformed_output errors" do
+      malformed_envelopes = [
+        %{
+          "v" => Protocol.version(),
+          "id" => 12,
+          "kind" => "response",
+          "op" => "peek",
+          "body" => "not an object"
+        },
+        %{
+          "v" => Protocol.version(),
+          "id" => 13,
+          "kind" => "error",
+          "op" => "peek",
+          "body" => %{"code" => "bad_code", "message" => "bad"}
+        },
+        %{
+          "v" => Protocol.version(),
+          "id" => 14,
+          "kind" => "request",
+          "op" => "peek",
+          "body" => %{"signal" => "count"}
+        }
+      ]
+
+      for envelope <- malformed_envelopes do
+        assert {:error, %{"code" => "malformed_output", "fatal" => true}} =
+                 Protocol.to_elixir_return(envelope)
+      end
+    end
   end
 
   describe "wire frame examples" do

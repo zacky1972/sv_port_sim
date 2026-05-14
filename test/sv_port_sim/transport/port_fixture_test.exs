@@ -201,6 +201,79 @@ defmodule SvPortSim.Transport.PortFixtureTest do
              ["reset", "poke", "tick", "cycle", "peek", "finish?", "stop"]
   end
 
+  test "raw port transport accepts eval and transaction MVP operations" do
+    trace = trace_path()
+    {:ok, state} = PortTransport.open(executable: fixture_executable(), args: ["--trace", trace])
+
+    on_exit(fn -> PortTransport.close(state) end)
+
+    assert {:ok, %{"op" => "reset", "body" => %{"cycle" => 1}}, state} =
+             PortTransport.request(request(0, "reset", %{"cycles" => 1}), state, @request_timeout)
+
+    assert {:ok, %{"op" => "poke", "body" => %{"signal" => "enable"}}, state} =
+             PortTransport.request(
+               request(1, "poke", %{
+                 "signal" => "enable",
+                 "value" => %{"bits" => "1", "width" => 1}
+               }),
+               state,
+               @request_timeout
+             )
+
+    assert {:ok, %{"op" => "eval", "body" => %{"settled" => true, "cycle" => 1}}, state} =
+             PortTransport.request(request(2, "eval", %{}), state, @request_timeout)
+
+    transaction = %{
+      "steps" => [
+        %{
+          "op" => "poke",
+          "body" => %{
+            "signal" => "enable",
+            "value" => %{"bits" => "1", "width" => 1}
+          }
+        },
+        %{"op" => "tick", "body" => %{"clock" => "clk", "cycles" => 2}},
+        %{"op" => "eval", "body" => %{}},
+        %{"op" => "peek", "body" => %{"signal" => "count"}}
+      ]
+    }
+
+    assert {:ok,
+            %{
+              "op" => "transaction",
+              "body" => %{
+                "cycle" => 3,
+                "results" => [
+                  %{"op" => "poke", "body" => %{"signal" => "enable", "cycle" => 1}},
+                  %{"op" => "tick", "body" => %{"clock" => "clk", "cycles" => 2, "cycle" => 3}},
+                  %{"op" => "eval", "body" => %{"settled" => true, "cycle" => 3}},
+                  %{
+                    "op" => "peek",
+                    "body" => %{
+                      "signal" => "count",
+                      "value" => %{"bits" => "0010", "width" => 4},
+                      "cycle" => 3
+                    }
+                  }
+                ]
+              }
+            }, state} =
+             PortTransport.request(
+               request(3, "transaction", transaction),
+               state,
+               @request_timeout
+             )
+
+    assert {:ok, %{"op" => "stop", "body" => %{"status" => "closing"}}, _state} =
+             PortTransport.request(request(4, "stop", %{}), state, @request_timeout)
+
+    trace = read_trace(trace)
+    assert_frame_lengths!(trace)
+
+    assert trace |> Enum.filter(&(&1["dir"] == "in")) |> Enum.map(& &1["payload"]["op"]) ==
+             ["reset", "poke", "eval", "transaction", "stop"]
+  end
+
   test "counter can be reset, advanced, and queried in one process" do
     trace = trace_path()
     {:ok, sim} = start_sim(trace)

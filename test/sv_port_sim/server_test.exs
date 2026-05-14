@@ -219,6 +219,72 @@ defmodule SvPortSim.ServerTest do
   end
 
   describe "request/4" do
+    test "wraps all MVP simulator operations as state-independent request envelopes" do
+      version = Protocol.version()
+
+      operations = [
+        {"reset", %{"cycles" => 2, "reset" => "rst_n", "clock" => "clk"}},
+        {"poke", %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}}},
+        {"peek", %{"signal" => "count"}},
+        {"eval", %{}},
+        {"tick", %{"cycles" => 3, "clock" => "clk"}},
+        {"cycle", %{"cycles" => 4, "clock" => "clk"}},
+        {"transaction",
+         %{
+           "steps" => [
+             %{
+               "op" => "poke",
+               "body" => %{
+                 "signal" => "enable",
+                 "value" => %{"bits" => "1", "width" => 1}
+               }
+             },
+             %{"op" => "eval", "body" => %{}},
+             %{"op" => "peek", "body" => %{"signal" => "count"}}
+           ]
+         }}
+      ]
+
+      {:ok, sim} =
+        start_server(
+          default_timeout: 321,
+          transport_opts: [notify: self()]
+        )
+
+      assert_receive {:transport_opened, _opts}
+
+      for {{op, body}, id} <- Enum.with_index(operations) do
+        assert {:ok, ^body} = Server.request(sim, op, body, :default)
+
+        assert_receive {:transport_request, request, 321}
+
+        assert request == %{
+                 "v" => version,
+                 "id" => id,
+                 "kind" => "request",
+                 "op" => op,
+                 "body" => body
+               }
+      end
+
+      ref = Process.monitor(sim)
+
+      assert :ok = Server.stop(sim, :default)
+
+      assert_receive {:transport_request, shutdown_request, 321}
+
+      assert shutdown_request == %{
+               "v" => version,
+               "id" => length(operations),
+               "kind" => "request",
+               "op" => "shutdown",
+               "body" => %{}
+             }
+
+      assert_receive {:transport_closed, _pid}
+      assert_receive {:DOWN, ^ref, :process, ^sim, :normal}
+    end
+
     test "assigns monotonic request ids and resolves default and per-call timeouts" do
       version = Protocol.version()
 
