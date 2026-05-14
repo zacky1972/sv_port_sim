@@ -663,20 +663,18 @@ defmodule SvPortSim.Server do
   defp monitor_instance(_instance), do: {nil, nil}
 
   defp wait_for_terminal_stop(result, pid, monitor_ref) do
-    try do
-      if terminal_stop_result?(result) and is_pid(pid) and is_reference(monitor_ref) do
-        receive do
-          {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> result
-        after
-          1_000 -> result
-        end
-      else
-        result
+    if terminal_stop_result?(result) and is_pid(pid) and is_reference(monitor_ref) do
+      receive do
+        {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> result
+      after
+        1_000 -> result
       end
-    after
-      if is_reference(monitor_ref) do
-        Process.demonitor(monitor_ref, [:flush])
-      end
+    else
+      result
+    end
+  after
+    if is_reference(monitor_ref) do
+      Process.demonitor(monitor_ref, [:flush])
     end
   end
 
