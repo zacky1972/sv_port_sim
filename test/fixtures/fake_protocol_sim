@@ -175,6 +175,31 @@ defmodule SvPortSimFakeProtocolSim do
     write_response(request, "response", response_body, state)
   end
 
+  defp handle_request(%{"op" => "eval"} = request, state) do
+    write_response(request, "response", %{"settled" => true, "cycle" => state.cycle}, state)
+  end
+
+  defp handle_request(%{"op" => "transaction", "body" => %{"steps" => steps}} = request, state)
+       when is_list(steps) do
+    case run_transaction_steps(steps, state, []) do
+      {:ok, results, state} ->
+        write_response(request, "response", %{"results" => results, "cycle" => state.cycle}, state)
+
+      {:error, code, message, details} ->
+        write_error(request, code, message, details, state)
+    end
+  end
+
+  defp handle_request(%{"op" => "transaction"} = request, state) do
+    write_error(
+      request,
+      "invalid_request",
+      "transaction steps must be a list",
+      %{"field" => "steps"},
+      state
+    )
+  end
+
   defp handle_request(%{"op" => "peek", "body" => %{"signal" => "missing"}} = request, state) do
     write_error(request, "invalid_signal", "unknown signal", %{"signal" => "missing"}, state)
   end
@@ -227,6 +252,65 @@ defmodule SvPortSimFakeProtocolSim do
     }
 
     write_error(request, "invalid_request", "invalid request envelope", %{}, state)
+  end
+
+  defp run_transaction_steps([], state, results) do
+    {:ok, Enum.reverse(results), state}
+  end
+
+  defp run_transaction_steps([%{"op" => "poke", "body" => body} | rest], state, results) do
+    signal = Map.get(body, "signal")
+    value = Map.get(body, "value")
+    state = put_in(state.signals[signal], value)
+
+    result = %{
+      "op" => "poke",
+      "body" => %{"signal" => signal, "value" => value, "cycle" => state.cycle}
+    }
+
+    run_transaction_steps(rest, state, [result | results])
+  end
+
+  defp run_transaction_steps([%{"op" => op, "body" => body} | rest], state, results)
+       when op in ["tick", "cycle"] do
+    cycles = positive_integer(Map.get(body, "cycles"), 1)
+    clock = Map.get(body, "clock", "clk")
+    state = tick_state(state, cycles)
+
+    response_body =
+      if op == "tick" do
+        %{"clock" => clock, "cycles" => cycles, "cycle" => state.cycle}
+      else
+        %{"cycles" => cycles, "cycle" => state.cycle}
+      end
+
+    run_transaction_steps(rest, state, [%{"op" => op, "body" => response_body} | results])
+  end
+
+  defp run_transaction_steps([%{"op" => "eval"} | rest], state, results) do
+    result = %{"op" => "eval", "body" => %{"settled" => true, "cycle" => state.cycle}}
+
+    run_transaction_steps(rest, state, [result | results])
+  end
+
+  defp run_transaction_steps([%{"op" => "peek", "body" => body} | rest], state, results) do
+    signal = Map.get(body, "signal")
+    value = Map.get(state.signals, signal, encoded_counter(0))
+
+    result = %{
+      "op" => "peek",
+      "body" => %{"signal" => signal, "value" => value, "cycle" => state.cycle}
+    }
+
+    run_transaction_steps(rest, state, [result | results])
+  end
+
+  defp run_transaction_steps([%{"op" => op} | _rest], _state, _results) do
+    {:error, "unsupported_command", "unsupported transaction step", %{"op" => op}}
+  end
+
+  defp run_transaction_steps([step | _rest], _state, _results) do
+    {:error, "invalid_request", "invalid transaction step", %{"step" => inspect(step)}}
   end
 
   defp tick_state(state, cycles) do
