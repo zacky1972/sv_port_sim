@@ -4,6 +4,8 @@ defmodule SvPortSim.PortCodecTest do
   alias SvPortSim.PortCodec
   alias SvPortSim.Protocol
 
+  doctest PortCodec
+
   @commands [
     {:reset, "reset", %{"cycles" => 2, "reset" => "rst_n", "clock" => "clk"}, %{"cycles" => 2}},
     {:poke, "poke", %{"signal" => "enable", "value" => %{"bits" => "1", "width" => 1}},

@@ -6,6 +6,28 @@ defmodule SvPortSim.PortCodec do
   simulator process. This module only translates caller-supplied request ids,
   commands, and bodies to JSON payload bytes, and translates wrapper response
   payload bytes back to public runtime return shapes.
+
+  ## Examples
+
+      iex> {:ok, payload} = SvPortSim.PortCodec.encode_request(1, :peek, %{"signal" => "count"})
+      iex> {:ok, envelope} = SvPortSim.Protocol.decode_payload(payload)
+      iex> {envelope["kind"], envelope["op"], envelope["body"]}
+      {"request", "peek", %{"signal" => "count"}}
+
+      iex> response = %{
+      ...>   "v" => SvPortSim.Protocol.version(),
+      ...>   "id" => 1,
+      ...>   "kind" => "response",
+      ...>   "op" => "peek",
+      ...>   "body" => %{"value" => %{"bits" => "0001", "width" => 4}}
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(response)
+      iex> SvPortSim.PortCodec.decode_response(payload, 1, :peek)
+      {:ok, %{"value" => %{"bits" => "0001", "width" => 4}}}
+
+      iex> {:error, error} = SvPortSim.PortCodec.decode_response("{", 1, :peek)
+      iex> {error["code"], error["fatal"]}
+      {"malformed_output", true}
   """
 
   alias SvPortSim.Protocol
@@ -37,8 +59,27 @@ defmodule SvPortSim.PortCodec do
   @doc """
   Encodes a simulator request envelope into JSON payload bytes.
 
-  The returned binary is the JSON payload only. It must not include the four-byte
-  port packet prefix because `{:packet, 4}` framing is handled by the BEAM port.
+  The returned binary is the JSON payload only. It must not include the
+  four-byte port packet prefix because `{:packet, 4}` framing is handled by the
+  BEAM port.
+
+  ## Examples
+
+      iex> {:ok, payload} = SvPortSim.PortCodec.encode_request(7, :tick, %{"cycles" => 2, "clock" => "clk"})
+      iex> {:ok, decoded} = SvPortSim.Protocol.decode_payload(payload)
+      iex> {decoded["id"], decoded["kind"], decoded["op"], decoded["body"]["cycles"]}
+      {7, "request", "tick", 2}
+
+      iex> {:ok, payload} = SvPortSim.PortCodec.encode_request(8, :stop, %{})
+      iex> {:ok, decoded} = SvPortSim.Protocol.decode_payload(payload)
+      iex> decoded["op"]
+      "shutdown"
+
+      iex> SvPortSim.PortCodec.encode_request(-1, :peek, %{"signal" => "count"})
+      {:error, {:invalid_request_id, -1}}
+
+      iex> SvPortSim.PortCodec.encode_request(1, :not_a_command, %{})
+      {:error, {:unsupported_command, :not_a_command}}
   """
   @spec encode_request(term(), command(), term()) :: {:ok, binary()} | {:error, term()}
   def encode_request(id, command, body) do
@@ -62,6 +103,44 @@ defmodule SvPortSim.PortCodec do
   `{:error, error_body}` with a normalized canonical error body. Malformed JSON,
   incomplete payloads, non-response envelopes, and mismatched ids or operations
   are converted into fatal `"malformed_output"` runtime errors.
+
+  ## Examples
+
+      iex> response = %{
+      ...>   "v" => SvPortSim.Protocol.version(),
+      ...>   "id" => 5,
+      ...>   "kind" => "response",
+      ...>   "op" => "eval",
+      ...>   "body" => %{"settled" => true}
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(response)
+      iex> SvPortSim.PortCodec.decode_response(payload, 5, "eval")
+      {:ok, %{"settled" => true}}
+
+      iex> {:ok, body} = SvPortSim.Protocol.error_body("invalid_signal", "unknown signal", %{"signal" => "missing"})
+      iex> error = %{
+      ...>   "v" => SvPortSim.Protocol.version(),
+      ...>   "id" => 6,
+      ...>   "kind" => "error",
+      ...>   "op" => "peek",
+      ...>   "body" => body
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(error)
+      iex> {:error, returned} = SvPortSim.PortCodec.decode_response(payload, 6, :peek)
+      iex> {returned["code"], returned["fatal"], returned["details"]}
+      {"invalid_signal", false, %{"signal" => "missing"}}
+
+      iex> response = %{
+      ...>   "v" => SvPortSim.Protocol.version(),
+      ...>   "id" => 10,
+      ...>   "kind" => "response",
+      ...>   "op" => "peek",
+      ...>   "body" => %{}
+      ...> }
+      iex> {:ok, payload} = SvPortSim.Protocol.encode_payload(response)
+      iex> {:error, error} = SvPortSim.PortCodec.decode_response(payload, 11, :peek)
+      iex> {error["code"], error["details"]["expected_id"], error["details"]["actual_id"]}
+      {"malformed_output", 11, 10}
   """
   @spec decode_response(binary(), term(), command()) :: {:ok, map()} | {:error, map()}
   def decode_response(payload, expected_id, expected_command) do
