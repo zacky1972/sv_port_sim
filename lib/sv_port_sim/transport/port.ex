@@ -7,6 +7,27 @@ defmodule SvPortSim.Transport.Port do
   framing, and exit-status reporting. With `{:packet, 4}`, the BEAM sends and
   receives only the JSON payload bytes while the external wrapper reads and
   writes the four-byte big-endian length prefix itself.
+
+  ## Options
+
+    * `:executable` - path to the wrapper executable. Required.
+    * `:args` - command-line arguments passed to the wrapper executable.
+      Defaults to `[]`.
+    * `:codec` - optional request/response codec module. When omitted, this
+      transport uses `SvPortSim.Protocol` directly.
+
+  A custom codec is mainly intended for tests and alternate runtimes that need
+  to observe or replace the payload boundary without replacing the whole
+  transport. The module must implement:
+
+    * `encode_request(id, op, body)`, returning `{:ok, payload}` or
+      `{:error, reason}`.
+    * `decode_response(payload, expected_id, expected_op)`, returning either
+      `{:ok, response_envelope}`, `{:ok, response_body}`,
+      `{:error, error_body}`, or `{:error, reason}`.
+
+  When a codec returns only a successful response body, the transport wraps it
+  back into a response envelope before handing it to `SvPortSim.Server`.
   """
 
   @behaviour SvPortSim.Transport

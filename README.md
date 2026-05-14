@@ -22,6 +22,14 @@ SvPortSim.public_functions()
 
 The default transport, `SvPortSim.Transport.Port`, opens the wrapper executable with the port framing documented by `SvPortSim.Protocol`. `:executable` is required for that default transport. Tests and alternate runtimes can provide a module implementing `SvPortSim.Transport` via the `:transport` option.
 
+The default port transport also has a codec boundary between transport I/O and protocol payload handling. By default it uses `SvPortSim.Protocol` to encode request envelopes and decode response envelopes. Tests and alternate runtimes may pass a codec module to the default transport with `transport_opts: [codec: MyCodec]`.
+
+A custom codec module must provide:
+
+  * `encode_request(id, op, body)`, returning `{:ok, payload}` or `{:error, reason}`.
+  * `decode_response(payload, expected_id, expected_op)`, returning `{:ok, response_envelope_or_body}` or `{:error, error_body_or_reason}`.
+
+
 Runtime commands return `{:ok, body}` for successful wrapper responses or `{:error, error_body}` for wrapper-side and Elixir-side failures. `error_body` follows the canonical shape from `SvPortSim.Protocol`, including `"code"`, `"message"`, `"details"`, and `"fatal"`. Fatal errors close the current transport and stop the instance; callers should start a new instance before retrying.
 
 All runtime commands accept `timeout: timeout()`. `reset/2` also accepts `:cycles` and `:reset`; `tick/2` also accepts `:cycles` and `:clock`. `poke/4` accepts `%{bits: bits, width: width}` or `%{"bits" => bits, "width" => width}` and normalizes it to JSON-compatible string-keyed data before sending it to the wrapper.
