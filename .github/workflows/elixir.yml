@@ -12,8 +12,15 @@ permissions:
 
 jobs:
   build:
-    name: Build and test
+    name: Build and test / Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.19.5"
+            otp: "28.4.2"
 
     steps:
       - uses: actions/checkout@v6
@@ -21,15 +28,21 @@ jobs:
       - name: Set up Elixir
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0
         with:
-          elixir-version: "1.19.5"
-          otp-version: "28.4.2"
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+          version-type: strict
+
+      - name: Print BEAM versions
+        run: elixir -v
 
       - name: Restore dependencies cache
         uses: actions/cache@v5
         with:
           path: deps
-          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-
+          key: ${{ runner.os }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-
+            ${{ runner.os }}-mix-
 
       - name: Install dependencies
         run: mix deps.get
@@ -39,3 +52,78 @@ jobs:
 
       - name: Run tests
         run: mix test
+
+  issue-85-warning-reproducer:
+    name: Issue #85 reproducer / Elixir 1.20.0 compiled with OTP 27 on OTP 29
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install OTP 29 and Elixir 1.20.0 compiled with OTP 27
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+          # The official install script expects both arguments in one invocation.
+          # We use it to install Erlang/OTP 29, then override Elixir with the
+          # OTP-27 precompiled Elixir archive to reproduce Issue #85 exactly:
+          #   Erlang/OTP 29 runtime
+          #   Elixir 1.20.0 compiled with Erlang/OTP 27
+          curl -fsSO https://elixir-lang.org/install.sh
+          sh install.sh elixir@1.20.0 otp@29.0.1 --force
+
+          installs_dir="$HOME/.elixir-install/installs"
+          otp_bin="$({ find "$installs_dir/otp" -type f -path '*/bin/erl' -printf '%h\n' || true; } | sort -V | tail -n 1)"
+          if [ -z "$otp_bin" ]; then
+            echo "Failed to find an OTP 29 erl executable under $installs_dir/otp" >&2
+            exit 1
+          fi
+
+          elixir_dir="$HOME/.elixir-install/elixir-1.20.0-otp-27"
+          curl -fsSL -o /tmp/elixir-1.20.0-otp-27.zip \
+            https://builds.hex.pm/builds/elixir/v1.20.0-otp-27.zip
+          rm -rf "$elixir_dir"
+          mkdir -p "$elixir_dir"
+          unzip -q /tmp/elixir-1.20.0-otp-27.zip -d "$elixir_dir"
+
+          echo "$otp_bin" >> "$GITHUB_PATH"
+          echo "$elixir_dir/bin" >> "$GITHUB_PATH"
+
+      - name: Print BEAM versions
+        run: |
+          which erl
+          which elixir
+          elixir -v
+
+      - name: Assert Issue #85 toolchain shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_output="$(elixir -v)"
+          echo "$version_output"
+          grep -F "Erlang/OTP 29" <<< "$version_output"
+          grep -F "Elixir 1.20.0 (compiled with Erlang/OTP 27)" <<< "$version_output"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v5
+        with:
+          path: deps
+          key: ${{ runner.os }}-issue-85-elixir-1.20.0-otp27-runtime-otp29-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-issue-85-elixir-1.20.0-otp27-runtime-otp29-mix-
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Reproduce warning-as-error failure from issue #85
+        run: mix compile --warnings-as-errors --force
