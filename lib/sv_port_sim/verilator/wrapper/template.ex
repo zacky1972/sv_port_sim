@@ -23,6 +23,7 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
         }
 
   @template_path Path.expand("../../../../priv/sv_port_sim/wrapper.cpp.eex", __DIR__)
+
   @external_resource @template_path
 
   EEx.function_from_file(
@@ -66,7 +67,6 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
              is_binary(peek_cases) do
     clock_cases = Map.get(context, :clock_cases, "")
     default_clock_case = Map.get(context, :default_clock_case, "return false;\n")
-
     reset_cases = Map.get(context, :reset_cases, "")
     default_reset_case = Map.get(context, :default_reset_case, "return false;\n")
 
@@ -98,6 +98,25 @@ defmodule SvPortSim.Verilator.Wrapper.Template do
       trace.members,
       trace.dump_call,
       trace.close_call
+    )
+    |> remove_duplicate_clock_detail()
+    |> repair_reset_response_helpers()
+  end
+
+  defp remove_duplicate_clock_detail(source) do
+    Regex.replace(
+      ~r/\nstd::string clock_detail\(const std::string& clock\)\s*\{\s*if \(clock\.empty\(\)\)\s*\{\s*return "\{\}";\s*\}\s*return json_detail\("clock", clock\);\s*\}\s*(?=std::string signal_detail)/,
+      source,
+      "\n"
+    )
+  end
+
+  defp repair_reset_response_helpers(source) do
+    source
+    |> String.replace("json_string(", "json_quote(")
+    |> String.replace(
+      "return response(request, body.str());",
+      "return respond(request, body.str());"
     )
   end
 end
