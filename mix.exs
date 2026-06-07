@@ -1,16 +1,21 @@
 defmodule SvPortSim.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/zacky1972/sv_port_sim"
+  @description "SvPortSim: Elixir interface for driving Verilated SystemVerilog modules through Ports, with each simulation instance managed as a GenServer."
+
   def project do
     [
       app: :sv_port_sim,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "Sv port sim",
-      description:
-        "SvPortSim: Elixir interface for driving Verilated SystemVerilog modules through Ports, with each simulation instance managed as a GenServer.",
+      name: "SvPortSim",
+      description: @description,
+      source_url: @source_url,
+      homepage_url: @source_url,
       docs: docs(),
       package: package(),
       aliases: aliases(),
@@ -21,23 +26,33 @@ defmodule SvPortSim.MixProject do
 
   # Run "mix help compile.app" to learn about applications.
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    [extra_applications: [:logger]]
   end
 
   def docs do
     [
       main: "readme",
-      extras: ["README.md"]
+      source_ref: "v#{@version}",
+      source_url: @source_url,
+      homepage_url: @source_url,
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE.md"
+      ]
     ]
   end
 
   def package do
     [
       name: :sv_port_sim,
+      files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE.md),
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/TODO/sv_port_sim"}
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
+        "License" => "#{@source_url}/blob/main/LICENSE.md"
+      }
     ]
   end
 
@@ -66,9 +81,7 @@ defmodule SvPortSim.MixProject do
   end
 
   def cli do
-    [
-      preferred_envs: [precommit: :test]
-    ]
+    [preferred_envs: [precommit: :test]]
   end
 
   def dialyzer do
