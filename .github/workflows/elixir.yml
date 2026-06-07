@@ -124,6 +124,13 @@ jobs:
         if: matrix.strict_warnings == 'false'
         run: mix test
 
-      - name: Run tests with warnings as errors
+      - name: Verify Docker for real Verilator workflow
         if: matrix.strict_warnings == 'true'
+        run: docker version
+
+      - name: Run tests with warnings as errors and real Verilator
+        if: matrix.strict_warnings == 'true'
+        env:
+          SV_PORT_SIM_RUN_VERILATOR_TESTS: "1"
+          SV_PORT_SIM_VERILATOR_IMAGE: "verilator/verilator:latest"
         run: mix test --warnings-as-errors
