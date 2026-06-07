@@ -565,8 +565,6 @@ defmodule SvPortSim.Server do
   defp reply_pending(%{from: from}, reply), do: GenServer.reply(from, reply)
   defp reply_pending(_pending, _reply), do: :ok
 
-  defp runtime_error(error_body, _request, _timeout) when is_map(error_body), do: error_body
-
   defp runtime_error({:timeout, _id, _op, timeout} = reason, _request, timeout) do
     reason
     |> runtime_failure()
