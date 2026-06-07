@@ -125,5 +125,78 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Reproduce warning-as-error failure from issue #85
+      - name: Verify Issue #85 warning-as-error stays fixed
         run: mix compile --warnings-as-errors --force
+
+  issue-87-test-warning-reproducer:
+    name: Issue #87 reproducer / test warning-as-error on Elixir 1.20.0 / OTP 29
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Elixir 1.20.0 and OTP 29
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+          curl -fsSO https://elixir-lang.org/install.sh
+          sh install.sh elixir@1.20.0 otp@29.0.1 --force
+
+          installs_dir="$HOME/.elixir-install/installs"
+          otp_bin="$({ find "$installs_dir/otp" -type f -path '*/bin/erl' -printf '%h\n' || true; } | sort -V | tail -n 1)"
+          elixir_bin="$({ find "$installs_dir/elixir" -type f -path '*/bin/elixir' -printf '%h\n' || true; } | sort -V | tail -n 1)"
+
+          if [ -z "$otp_bin" ]; then
+            echo "Failed to find an OTP 29 erl executable under $installs_dir/otp" >&2
+            exit 1
+          fi
+
+          if [ -z "$elixir_bin" ]; then
+            echo "Failed to find an Elixir 1.20.0 executable under $installs_dir/elixir" >&2
+            exit 1
+          fi
+
+          echo "$otp_bin" >> "$GITHUB_PATH"
+          echo "$elixir_bin" >> "$GITHUB_PATH"
+
+      - name: Print BEAM versions
+        run: |
+          which erl
+          which elixir
+          elixir -v
+
+      - name: Assert Issue #87 toolchain shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_output="$(elixir -v)"
+          echo "$version_output"
+          grep -F "Erlang/OTP 29" <<< "$version_output"
+          grep -F "Elixir 1.20.0" <<< "$version_output"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v5
+        with:
+          path: deps
+          key: ${{ runner.os }}-issue-87-elixir-1.20.0-otp29-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-issue-87-elixir-1.20.0-otp29-mix-
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Precompile dependencies without warnings-as-errors
+        run: MIX_ENV=test mix deps.compile
+
+      - name: Reproduce warning-as-error failure from issue #87
+        run: mix test --warnings-as-errors test/sv_port_sim/transport/port_error_response_fixture_test.exs
