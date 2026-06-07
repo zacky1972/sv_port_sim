@@ -125,7 +125,7 @@ defmodule SvPortSim.Transport.PortErrorResponseFixtureTest do
   end
 
   defp extract_frame(<<length::32, rest::binary>>) when byte_size(rest) >= length do
-    <<payload::binary-size(length), remainder::binary>> = rest
+    <<payload::binary-size(^length), remainder::binary>> = rest
     {:ok, payload, remainder}
   end
 
