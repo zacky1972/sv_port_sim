@@ -17,7 +17,19 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
     assert context.reset_cases =~ ~s(reset == "rst_n")
     assert context.reset_cases =~ "const int active_level = 0;"
     assert context.reset_cases =~ "const int inactive_level = 1;"
+    assert context.reset_cases =~ "top->rst_n = level;"
+    refute context.reset_cases =~ "static_cast<decltype"
     assert context.default_reset_case =~ ~s(reset = "rst_n";)
+  end
+
+  test "generates clock dispatch without casting to a reference port type" do
+    specs = [SignalSpec.clock("clk")]
+
+    assert {:ok, context} = Accessor.context(specs)
+
+    assert context.clock_cases =~ ~s(clock == "clk")
+    assert context.clock_cases =~ "top->clk = value;"
+    refute context.clock_cases =~ "static_cast<decltype"
   end
 
   test "does not choose a default reset when multiple resets exist" do
@@ -67,29 +79,28 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
                    return invalid_value_accessor(signal, "invalid encoded value");
                  }
                  auto top = session.top_model();
-                 top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));
+                 top->enable = bits_to_uint64(value.bits);
                  session.eval();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->enable), 1));
                }
-
                if (signal == "count") {
                  return invalid_signal_accessor(signal, "signal is not writable");
                }
-
                if (signal == "bus") {
                  if (!valid_two_state_encoded_value(value, 4)) {
                    return invalid_value_accessor(signal, "invalid encoded value");
                  }
                  auto top = session.top_model();
-                 top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));
+                 top->bus = bits_to_uint64(value.bits);
                  session.eval();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));
                }
-
                if (signal == "wide") {
                  return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
                }
                """)
+
+      refute context.poke_cases =~ "static_cast<decltype"
     end
 
     test "emits peek cases in signal order" do
@@ -100,17 +111,14 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
                if (signal == "enable") {
                  return invalid_signal_accessor(signal, "signal is not readable");
                }
-
                if (signal == "count") {
                  auto top = session.top_model();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));
                }
-
                if (signal == "bus") {
                  auto top = session.top_model();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));
                }
-
                if (signal == "wide") {
                  return invalid_signal_accessor(signal, "signal shape is not supported by generated accessors");
                }
@@ -121,13 +129,11 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
       specs = [SignalSpec.data("debug$value", "inout", "logic", 1)]
 
       assert {:ok, context} = Accessor.context(specs)
-
       assert context.signal_specs_json =~ ~S("name":"debug$value")
       assert context.poke_cases =~ ~s|if (signal == "debug$value")|
       assert context.peek_cases =~ ~s|if (signal == "debug$value")|
       assert context.poke_cases =~ "signal shape is not supported by generated accessors"
       assert context.peek_cases =~ "signal shape is not supported by generated accessors"
-
       refute context.poke_cases =~ "top->debug$value"
       refute context.peek_cases =~ "top->debug$value"
     end
@@ -139,11 +145,9 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
       ]
 
       assert {:ok, context} = Accessor.context(specs)
-
       assert context.poke_cases =~ "valid_two_state_encoded_value(value, 64)"
       assert context.poke_cases =~ "top->word64 ="
       assert context.peek_cases =~ "top->word64"
-
       assert context.poke_cases =~ ~s|if (signal == "word65")|
       assert context.peek_cases =~ ~s|if (signal == "word65")|
       refute context.poke_cases =~ "top->word65 ="
@@ -165,7 +169,6 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
 
       assert {:ok, context} = Accessor.context(specs)
       assert %{normalized_signal_specs: [normalized]} = context
-
       assert normalized["name"] == "enable"
       assert normalized["direction"] == "input"
       assert normalized["type"] == "bit"
@@ -176,12 +179,12 @@ defmodule SvPortSim.Verilator.Wrapper.AccessorTest do
                ~S([{"direction":"input","name":"enable","packed":{"dimensions":[],"kind":"scalar"},"role":{"kind":"data"},"signed":false,"type":"bit","width":1}])
 
       assert context.poke_cases =~ ~s|if (signal == "enable")|
-
-      assert context.poke_cases =~
-               "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
+      assert context.poke_cases =~ "top->enable = bits_to_uint64(value.bits);"
 
       assert context.peek_cases =~
                ~s|return invalid_signal_accessor(signal, "signal is not readable");|
+
+      refute context.poke_cases =~ "static_cast<decltype"
     end
 
     test "wraps SignalSpec validation failures with invalid_signal_specs" do
