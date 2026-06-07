@@ -211,9 +211,10 @@ defmodule SvPortSim.CompilerTest do
 
   if System.get_env("SV_PORT_SIM_RUN_VERILATOR_TESTS") == "1" do
     @tag :verilator
-    test "minimum generated RTL workflow compiles and runs through real Verilator", %{
-      original_docker: original_docker
-    } do
+    test "minimum generated RTL workflow compiles through real Verilator and runs on Linux hosts",
+         %{
+           original_docker: original_docker
+         } do
       docker = System.get_env("SV_PORT_SIM_DOCKER") || original_docker
 
       if is_nil(docker) do
@@ -253,58 +254,70 @@ defmodule SvPortSim.CompilerTest do
 
       assert File.exists?(result.executable)
 
-      {:ok, sim} = SvPortSim.start_link(executable: result.executable)
+      if linux_host?() do
+        {:ok, sim} = SvPortSim.start_link(executable: result.executable)
 
-      on_exit(fn ->
-        if Process.alive?(sim) do
-          SvPortSim.stop(sim)
-        end
-      end)
+        on_exit(fn ->
+          if Process.alive?(sim) do
+            SvPortSim.stop(sim)
+          end
+        end)
 
-      assert {:ok, _} = SvPortSim.reset(sim, cycles: 2, clock: "clk", reset: "rst")
+        assert {:ok, _} = SvPortSim.reset(sim, cycles: 2, clock: "clk", reset: "rst")
 
-      assert {:ok, %{"value" => %{"bits" => "0", "width" => 1}}} =
-               SvPortSim.peek(sim, "m_valid")
+        assert {:ok, %{"value" => %{"bits" => "0", "width" => 1}}} =
+                 SvPortSim.peek(sim, "m_valid")
 
-      assert {:ok, %{"value" => %{"bits" => "00000000", "width" => 8}}} =
-               SvPortSim.peek(sim, "y")
+        assert {:ok, %{"value" => %{"bits" => "00000000", "width" => 8}}} =
+                 SvPortSim.peek(sim, "y")
 
-      assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "1", width: 1})
-      assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "00001111", width: 8})
-      assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11110000", width: 8})
-      assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
+        assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "1", width: 1})
+        assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "00001111", width: 8})
+        assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11110000", width: 8})
+        assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
 
-      assert {:ok, %{"value" => %{"bits" => "1", "width" => 1}}} =
-               SvPortSim.peek(sim, "m_valid")
+        assert {:ok, %{"value" => %{"bits" => "1", "width" => 1}}} =
+                 SvPortSim.peek(sim, "m_valid")
 
-      assert {:ok, %{"value" => %{"bits" => "11111111", "width" => 8}}} =
-               SvPortSim.peek(sim, "y")
+        assert {:ok, %{"value" => %{"bits" => "11111111", "width" => 8}}} =
+                 SvPortSim.peek(sim, "y")
 
-      assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "0", width: 1})
-      assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "00000000", width: 8})
-      assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11111111", width: 8})
-      assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
+        assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "0", width: 1})
+        assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "00000000", width: 8})
+        assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11111111", width: 8})
+        assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
 
-      assert {:ok, %{"value" => %{"bits" => "0", "width" => 1}}} =
-               SvPortSim.peek(sim, "m_valid")
+        assert {:ok, %{"value" => %{"bits" => "0", "width" => 1}}} =
+                 SvPortSim.peek(sim, "m_valid")
 
-      assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "1", width: 1})
-      assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "10101010", width: 8})
-      assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11001100", width: 8})
-      assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
+        assert {:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "1", width: 1})
+        assert {:ok, _} = SvPortSim.poke(sim, "a", %{bits: "10101010", width: 8})
+        assert {:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11001100", width: 8})
+        assert {:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
 
-      assert {:ok, %{"value" => %{"bits" => "1", "width" => 1}}} =
-               SvPortSim.peek(sim, "m_valid")
+        assert {:ok, %{"value" => %{"bits" => "1", "width" => 1}}} =
+                 SvPortSim.peek(sim, "m_valid")
 
-      assert {:ok, %{"value" => %{"bits" => "01100110", "width" => 8}}} =
-               SvPortSim.peek(sim, "y")
+        assert {:ok, %{"value" => %{"bits" => "01100110", "width" => 8}}} =
+                 SvPortSim.peek(sim, "y")
 
-      :ok = SvPortSim.stop(sim)
+        :ok = SvPortSim.stop(sim)
+      else
+        expected_image =
+          System.get_env("SV_PORT_SIM_VERILATOR_IMAGE") || "verilator/verilator:latest"
+
+        assert result.build.image == expected_image
+        assert result.build.command |> Enum.any?(&String.ends_with?(&1, "_wrapper.cpp"))
+      end
 
       assert result.build.work_dir == work_dir
 
       assert result.build.command
              |> Enum.any?(&String.starts_with?(&1, "type=bind,source=#{work_dir},"))
+    end
+
+    defp linux_host? do
+      :os.type() == {:unix, :linux}
     end
 
     defp docker_bindable_build_dirs(top_module) do
@@ -339,7 +352,7 @@ defmodule SvPortSim.CompilerTest do
     @tag :verilator
     @tag skip:
            "set SV_PORT_SIM_RUN_VERILATOR_TESTS=1 to compile and run generated RTL through real Docker/Verilator"
-    test "minimum generated RTL workflow compiles and runs through real Verilator" do
+    test "minimum generated RTL workflow compiles through real Verilator and runs on Linux hosts" do
       :ok
     end
   end
