@@ -65,10 +65,81 @@ defmodule SvPortSim.SignalSpecTest do
     reset = %{
       reset
       | "width" => 2,
-        "packed" => %{"kind" => "packed_vector", "dimensions" => [%{"left" => 1, "right" => 0}]}
+        "packed" => %{
+          "kind" => "packed_vector",
+          "dimensions" => [%{"left" => 1, "right" => 0}]
+        }
     }
 
     assert {:error, {:role_requires_scalar, "reset", 2}} = SignalSpec.validate(reset)
+  end
+
+  test "minimum generated Verilator workflow ports use the stable SignalSpec contract" do
+    specs = [
+      SignalSpec.clock("clk", type: "logic"),
+      SignalSpec.reset("rst", type: "logic", active: "high"),
+      SignalSpec.data("s_valid", "input", "logic", 1),
+      SignalSpec.data("a", "input", "logic", 8),
+      SignalSpec.data("b", "input", "logic", 8),
+      SignalSpec.data("m_valid", "output", "logic", 1),
+      SignalSpec.data("y", "output", "logic", 8)
+    ]
+
+    assert :ok = SignalSpec.validate_many(specs)
+
+    assert {:ok, clk} = SignalSpec.lookup(specs, "clk")
+    assert clk["direction"] == "input"
+    assert clk["type"] == "logic"
+    assert clk["width"] == 1
+    assert clk["packed"] == %{"kind" => "scalar", "dimensions" => []}
+    assert clk["role"] == %{"kind" => "clock", "edge" => "posedge"}
+
+    assert {:ok, rst} = SignalSpec.lookup(specs, "rst")
+    assert rst["direction"] == "input"
+    assert rst["type"] == "logic"
+    assert rst["width"] == 1
+    assert rst["packed"] == %{"kind" => "scalar", "dimensions" => []}
+    assert rst["role"] == %{"kind" => "reset", "active" => "high"}
+
+    assert {:ok, s_valid} = SignalSpec.lookup(specs, "s_valid")
+    assert :ok = SignalSpec.validate_poke(s_valid, %{"bits" => "1", "width" => 1})
+    assert {:error, {:not_readable, "s_valid", "input"}} = SignalSpec.validate_peek(s_valid)
+
+    for input_name <- ~w(a b) do
+      assert {:ok, input} = SignalSpec.lookup(specs, input_name)
+      assert input["direction"] == "input"
+      assert input["type"] == "logic"
+      assert input["width"] == 8
+
+      assert input["packed"] == %{
+               "kind" => "packed_vector",
+               "dimensions" => [%{"left" => 7, "right" => 0}]
+             }
+
+      assert :ok = SignalSpec.validate_poke(input, %{"bits" => "00001111", "width" => 8})
+      assert {:error, {:not_readable, ^input_name, "input"}} = SignalSpec.validate_peek(input)
+    end
+
+    assert {:ok, m_valid} = SignalSpec.lookup(specs, "m_valid")
+    assert :ok = SignalSpec.validate_peek(m_valid)
+
+    assert {:error, {:not_writable, "m_valid", "output"}} =
+             SignalSpec.validate_poke(m_valid, %{"bits" => "0", "width" => 1})
+
+    assert {:ok, y} = SignalSpec.lookup(specs, "y")
+    assert y["direction"] == "output"
+    assert y["type"] == "logic"
+    assert y["width"] == 8
+
+    assert y["packed"] == %{
+             "kind" => "packed_vector",
+             "dimensions" => [%{"left" => 7, "right" => 0}]
+           }
+
+    assert :ok = SignalSpec.validate_peek(y)
+
+    assert {:error, {:not_writable, "y", "output"}} =
+             SignalSpec.validate_poke(y, %{"bits" => "11111111", "width" => 8})
   end
 
   test "unknown top-level fields and duplicate names are invalid" do
