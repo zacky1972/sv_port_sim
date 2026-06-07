@@ -91,17 +91,10 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     }
   end
 
-  defp poke_cases(accessors) do
-    Enum.map_join(accessors, "\n", &poke_case/1)
-  end
-
-  defp peek_cases(accessors) do
-    Enum.map_join(accessors, "\n", &peek_case/1)
-  end
-
-  defp clock_cases(clocks) do
-    Enum.map_join(clocks, "\n", &clock_case/1)
-  end
+  defp poke_cases(accessors), do: Enum.map_join(accessors, "\n", &poke_case/1)
+  defp peek_cases(accessors), do: Enum.map_join(accessors, "\n", &peek_case/1)
+  defp clock_cases(clocks), do: Enum.map_join(clocks, "\n", &clock_case/1)
+  defp reset_cases(resets), do: Enum.map_join(resets, "\n", &reset_case/1)
 
   defp poke_case(%{name: name, supported?: false}) do
     """
@@ -125,11 +118,9 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       if (!valid_two_state_encoded_value(value, #{width})) {
         return invalid_value_accessor(signal, "invalid encoded value");
       }
-
       auto top = session.top_model();
-      top->#{field} = static_cast<decltype(top->#{field})>(bits_to_uint64(value.bits));
+      top->#{field} = bits_to_uint64(value.bits);
       session.eval();
-
       return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
     }
     """
@@ -155,7 +146,6 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     """
     if (signal == "#{JsonLiteral.cpp_string(name)}") {
       auto top = session.top_model();
-
       return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->#{field}), #{width}));
     }
     """
@@ -175,11 +165,7 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     """
     if (clock == "#{JsonLiteral.cpp_string(name)}") {
       auto top = session.top_model();
-
-      session.tick_clock([top](int value) {
-        top->#{field} = static_cast<decltype(top->#{field})>(value);
-      }, #{cpp_bool(posedge?)});
-
+      session.tick_clock([top](int value) { top->#{field} = value; }, #{cpp_bool(posedge?)});
       return ok_clock(clock);
     }
     """
@@ -196,10 +182,6 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
     """
     return false;
     """
-  end
-
-  defp reset_cases(resets) do
-    Enum.map_join(resets, "\n", &reset_case/1)
   end
 
   defp reset_case(%{name: name, supported?: false}) do
@@ -227,11 +209,9 @@ defmodule SvPortSim.Verilator.Wrapper.Accessor do
       const int active_level = #{active_level};
       const int inactive_level = #{inactive_level};
       const int level = active ? active_level : inactive_level;
-
       auto top = session.top_model();
-      top->#{field} = static_cast<decltype(top->#{field})>(level);
+      top->#{field} = level;
       session.eval();
-
       return ok_reset(reset, active_level, inactive_level);
     }
     """

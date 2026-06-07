@@ -171,12 +171,12 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert {:ok, source} = Wrapper.source("Counter", specs)
 
     assert source =~ ~s|if (clock == "clk")|
-    assert source =~ "top->clk = static_cast<decltype(top->clk)>(value);"
+    assert source =~ "top->clk = value;"
     assert source =~ "session.tick_clock"
     assert source =~ ", true);"
 
     assert source =~ ~s|if (clock == "nclk")|
-    assert source =~ "top->nclk = static_cast<decltype(top->nclk)>(value);"
+    assert source =~ "top->nclk = value;"
     assert source =~ ", false);"
 
     assert source =~ ~s|return invalid_clock(clock, "unknown clock");|
@@ -196,7 +196,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
     assert source =~ ~s|if (signal == "enable")|
 
     assert source =~
-             "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
+             "top->enable = bits_to_uint64(value.bits);"
 
     assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not readable");|
 
@@ -207,7 +207,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
              "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->count), 8));"
 
     assert source =~
-             "top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));"
+             "top->bus = bits_to_uint64(value.bits);"
 
     assert source =~
              "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));"
@@ -309,7 +309,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
                    return invalid_value_accessor(signal, "invalid encoded value");
                  }
                  auto top = session.top_model();
-                 top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));
+                 top->enable = bits_to_uint64(value.bits);
                  session.eval();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->enable), 1));
                }
@@ -323,7 +323,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
                    return invalid_value_accessor(signal, "invalid encoded value");
                  }
                  auto top = session.top_model();
-                 top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));
+                 top->bus = bits_to_uint64(value.bits);
                  session.eval();
                  return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));
                }
@@ -509,7 +509,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
       assert source =~ ~s|if (signal == "enable")|
 
       assert source =~
-               "top->enable = static_cast<decltype(top->enable)>(bits_to_uint64(value.bits));"
+               "top->enable = bits_to_uint64(value.bits);"
 
       assert source =~ ~s|return invalid_signal_accessor(signal, "signal is not readable");|
 
@@ -522,7 +522,7 @@ defmodule SvPortSim.Verilator.WrapperTest do
       assert source =~ ~s|if (signal == "bus")|
 
       assert source =~
-               "top->bus = static_cast<decltype(top->bus)>(bits_to_uint64(value.bits));"
+               "top->bus = bits_to_uint64(value.bits);"
 
       assert source =~
                "return ok_accessor(encode_signal(static_cast<std::uint64_t>(top->bus), 4));"

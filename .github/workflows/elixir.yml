@@ -21,46 +21,28 @@ jobs:
         include:
           - elixir: "1.19.5"
             otp: "28.4.2"
+            setup: "setup-beam"
+            strict_warnings: "false"
+            cache_key: "elixir-1.19.5-otp-28.4.2"
+          - elixir: "1.20.0"
+            otp: "29.0.1"
+            setup: "manual-otp29-elixir120"
+            strict_warnings: "true"
+            cache_key: "elixir-1.20.0-otp-29.0.1"
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Elixir
+      - name: Set up Elixir with setup-beam
+        if: matrix.setup == 'setup-beam'
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0
         with:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
           version-type: strict
 
-      - name: Print BEAM versions
-        run: elixir -v
-
-      - name: Restore dependencies cache
-        uses: actions/cache@v5
-        with:
-          path: deps
-          key: ${{ runner.os }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}-mix-
-            ${{ runner.os }}-mix-
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Check
-        run: mix check
-
-      - name: Run tests
-        run: mix test
-
-  issue-85-warning-reproducer:
-    name: Issue #85 reproducer / Elixir 1.20.0 compiled with OTP 27 on OTP 29
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install OTP 29 and Elixir 1.20.0 compiled with OTP 27
+      - name: Set up Elixir 1.20 / OTP 29
+        if: matrix.setup == 'manual-otp29-elixir120'
         shell: bash
         run: |
           set -euo pipefail
@@ -68,83 +50,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-          # The official install script expects both arguments in one invocation.
-          # We use it to install Erlang/OTP 29, then override Elixir with the
-          # OTP-27 precompiled Elixir archive to reproduce Issue #85 exactly:
-          #   Erlang/OTP 29 runtime
-          #   Elixir 1.20.0 compiled with Erlang/OTP 27
+          # Install OTP 29 with the official Elixir installer, then put an
+          # Elixir 1.20.0 executable on PATH.  This keeps the CI check generic
+          # to the Elixir 1.20 / OTP 29 toolchain while avoiding issue-specific
+          # workflow jobs.
           curl -fsSO https://elixir-lang.org/install.sh
-          sh install.sh elixir@1.20.0 otp@29.0.1 --force
-
-          installs_dir="$HOME/.elixir-install/installs"
-          otp_bin="$({ find "$installs_dir/otp" -type f -path '*/bin/erl' -printf '%h\n' || true; } | sort -V | tail -n 1)"
-          if [ -z "$otp_bin" ]; then
-            echo "Failed to find an OTP 29 erl executable under $installs_dir/otp" >&2
-            exit 1
-          fi
-
-          elixir_dir="$HOME/.elixir-install/elixir-1.20.0-otp-27"
-          curl -fsSL -o /tmp/elixir-1.20.0-otp-27.zip \
-            https://builds.hex.pm/builds/elixir/v1.20.0-otp-27.zip
-          rm -rf "$elixir_dir"
-          mkdir -p "$elixir_dir"
-          unzip -q /tmp/elixir-1.20.0-otp-27.zip -d "$elixir_dir"
-
-          echo "$otp_bin" >> "$GITHUB_PATH"
-          echo "$elixir_dir/bin" >> "$GITHUB_PATH"
-
-      - name: Print BEAM versions
-        run: |
-          which erl
-          which elixir
-          elixir -v
-
-      - name: Assert Issue #85 toolchain shape
-        shell: bash
-        run: |
-          set -euo pipefail
-          version_output="$(elixir -v)"
-          echo "$version_output"
-          grep -F "Erlang/OTP 29" <<< "$version_output"
-          grep -F "Elixir 1.20.0 (compiled with Erlang/OTP 27)" <<< "$version_output"
-
-      - name: Install Hex and Rebar
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-
-      - name: Restore dependencies cache
-        uses: actions/cache@v5
-        with:
-          path: deps
-          key: ${{ runner.os }}-issue-85-elixir-1.20.0-otp27-runtime-otp29-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-issue-85-elixir-1.20.0-otp27-runtime-otp29-mix-
-            ${{ runner.os }}-mix-
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Verify Issue #85 warning-as-error stays fixed
-        run: mix compile --warnings-as-errors --force
-
-  issue-87-test-warning-reproducer:
-    name: Issue #87 reproducer / test warning-as-error on Elixir 1.20.0 / OTP 29
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Elixir 1.20.0 and OTP 29
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sudo apt-get update
-          sudo apt-get install -y unzip
-
-          curl -fsSO https://elixir-lang.org/install.sh
-          sh install.sh elixir@1.20.0 otp@29.0.1 --force
+          sh install.sh elixir@${{ matrix.elixir }} otp@${{ matrix.otp }} --force
 
           installs_dir="$HOME/.elixir-install/installs"
           otp_bin="$({ find "$installs_dir/otp" -type f -path '*/bin/erl' -printf '%h\n' || true; } | sort -V | tail -n 1)"
@@ -156,7 +67,7 @@ jobs:
           fi
 
           if [ -z "$elixir_bin" ]; then
-            echo "Failed to find an Elixir 1.20.0 executable under $installs_dir/elixir" >&2
+            echo "Failed to find an Elixir 1.20 executable under $installs_dir/elixir" >&2
             exit 1
           fi
 
@@ -169,7 +80,8 @@ jobs:
           which elixir
           elixir -v
 
-      - name: Assert Issue #87 toolchain shape
+      - name: Assert Elixir 1.20 / OTP 29 toolchain
+        if: matrix.setup == 'manual-otp29-elixir120'
         shell: bash
         run: |
           set -euo pipefail
@@ -179,6 +91,7 @@ jobs:
           grep -F "Elixir 1.20.0" <<< "$version_output"
 
       - name: Install Hex and Rebar
+        if: matrix.setup == 'manual-otp29-elixir120'
         run: |
           mix local.hex --force
           mix local.rebar --force
@@ -187,16 +100,30 @@ jobs:
         uses: actions/cache@v5
         with:
           path: deps
-          key: ${{ runner.os }}-issue-87-elixir-1.20.0-otp29-mix-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-${{ matrix.cache_key }}-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-issue-87-elixir-1.20.0-otp29-mix-
+            ${{ runner.os }}-${{ matrix.cache_key }}-mix-
             ${{ runner.os }}-mix-
 
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Precompile dependencies without warnings-as-errors
+      - name: Check
+        if: matrix.strict_warnings == 'false'
+        run: mix check
+
+      - name: Compile with warnings as errors
+        if: matrix.strict_warnings == 'true'
+        run: mix compile --warnings-as-errors --force
+
+      - name: Precompile test dependencies
+        if: matrix.strict_warnings == 'true'
         run: MIX_ENV=test mix deps.compile
 
-      - name: Reproduce warning-as-error failure from issue #87
-        run: mix test --warnings-as-errors test/sv_port_sim/transport/port_error_response_fixture_test.exs
+      - name: Run tests
+        if: matrix.strict_warnings == 'false'
+        run: mix test
+
+      - name: Run tests with warnings as errors
+        if: matrix.strict_warnings == 'true'
+        run: mix test --warnings-as-errors
