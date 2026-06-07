@@ -46,6 +46,103 @@ A typical session is:
 :ok = SvPortSim.stop(sim)
 ```
 
+
+## Generated RTL compile-and-run workflow
+
+`SvPortSim.Compiler.compile/3` can compile a generated SystemVerilog source map into a Verilated wrapper executable, and that executable can then be driven through the public `SvPortSim` runtime API.
+
+The caller provides three pieces of information:
+
+- the top module name,
+- an in-memory source map from module name to SystemVerilog source text,
+- explicit `SvPortSim.SignalSpec` metadata for the top-level ports.
+
+A minimal generated sequential module can be compiled and driven like this:
+
+```elixir
+alias SvPortSim.Compiler
+alias SvPortSim.SignalSpec
+
+top_module = "ExampleTop"
+
+sources = %{
+  "ExampleXor" => """
+  module ExampleXor(
+    input  logic [7:0] lhs,
+    input  logic [7:0] rhs,
+    output logic [7:0] out
+  );
+    assign out = lhs ^ rhs;
+  endmodule
+  """,
+  "ExampleTop" => """
+  module ExampleTop(
+    input  logic       clk,
+    input  logic       rst,
+    input  logic       s_valid,
+    input  logic [7:0] a,
+    input  logic [7:0] b,
+    output logic       m_valid,
+    output logic [7:0] y
+  );
+    logic [7:0] next_y;
+
+    ExampleXor u_xor(
+      .lhs(a),
+      .rhs(b),
+      .out(next_y)
+    );
+
+    always_ff @(posedge clk or posedge rst) begin
+      if (rst) begin
+        m_valid <= 1'b0;
+        y       <= 8'h00;
+      end else begin
+        m_valid <= s_valid;
+
+        if (s_valid) begin
+          y <= next_y;
+        end
+      end
+    end
+  endmodule
+  """
+}
+
+signal_specs = [
+  SvPortSim.SignalSpec.clock("clk", type: "logic"),
+  SvPortSim.SignalSpec.reset("rst", type: "logic", active: "high"),
+  SvPortSim.SignalSpec.data("s_valid", "input", "logic", 1),
+  SvPortSim.SignalSpec.data("a", "input", "logic", 8),
+  SvPortSim.SignalSpec.data("b", "input", "logic", 8),
+  SvPortSim.SignalSpec.data("m_valid", "output", "logic", 1),
+  SvPortSim.SignalSpec.data("y", "output", "logic", 8)
+]
+
+{:ok, build} =
+  SvPortSim.Compiler.compile(top_module, sources,
+    signal_specs: signal_specs,
+    wrapper_dir: "_build/sv_port_sim/example/wrapper",
+    work_dir: "_build/sv_port_sim/example/work",
+    verilator_args: ["-Wno-fatal"]
+  )
+
+{:ok, sim} = SvPortSim.start_link(executable: build.executable)
+
+{:ok, _} = SvPortSim.reset(sim, cycles: 2, clock: "clk", reset: "rst")
+{:ok, _} = SvPortSim.poke(sim, "s_valid", %{bits: "1", width: 1})
+{:ok, _} = SvPortSim.poke(sim, "a", %{bits: "00001111", width: 8})
+{:ok, _} = SvPortSim.poke(sim, "b", %{bits: "11110000", width: 8})
+{:ok, _} = SvPortSim.tick(sim, cycles: 1, clock: "clk")
+{:ok, %{"value" => y}} = SvPortSim.peek(sim, "y")
+
+:ok = SvPortSim.stop(sim)
+```
+
+The example uses scalar `logic` clock/reset/valid ports and one-dimensional packed `logic [7:0]` data ports. Runtime bit strings are ordered most-significant bit first, so `%{bits: "00001111", width: 8}` represents the 8-bit value `8'h0f`.
+
+When the Docker Verilator backend is used, the produced executable is built for the container platform. The executable can be launched directly with `SvPortSim.start_link/1` when the host platform is compatible with that output, such as Linux CI using the standard `verilator/verilator` image. On non-Linux hosts, the Docker backend still validates RTL expansion, wrapper generation, and Verilator compilation, but direct Port execution of that Linux executable requires a compatible runtime environment.
+
 ## Runtime protocol and supported SystemVerilog subset
 
 This is the high-level user-facing runtime contract. The detailed executable specifications live in:
