@@ -2,6 +2,7 @@ defmodule SvPortSim.Verilator.DockerTest do
   use ExUnit.Case, async: false
 
   alias SvPortSim.Verilator.Docker, as: VerilatorDocker
+  alias SvPortSim.Verilator.DockerWorker
 
   setup do
     tmp_dir =
@@ -111,6 +112,133 @@ defmodule SvPortSim.Verilator.DockerTest do
            ]
 
     assert build.log =~ "fake verilator build ok"
+  end
+
+  test "lint/3 runs Verilator lint-only without wrapper or executable", %{
+    bin_dir: bin_dir,
+    input_dir: input_dir,
+    work_dir: work_dir
+  } do
+    fake_docker = write_fake_docker!(bin_dir, successful_lint_script())
+    source_file = write_input_file!(input_dir, "Counter.sv", "module Counter; endmodule\n")
+
+    assert {:ok, lint} =
+             VerilatorDocker.lint(
+               "Counter",
+               [source_file],
+               docker: fake_docker,
+               work_dir: work_dir,
+               image: "verilator/verilator:test",
+               user: false,
+               extra_args: ["-Wall"]
+             )
+
+    assert lint.mode == :lint_only
+    assert lint.top_module == "Counter"
+    assert lint.image == "verilator/verilator:test"
+    assert lint.docker == fake_docker
+    assert lint.work_dir == work_dir
+    assert lint.obj_dir == Path.join(work_dir, "obj_dir")
+    refute Map.has_key?(lint, :executable)
+    assert File.read!(Path.join([work_dir, "rtl", "Counter.sv"])) =~ "module Counter"
+    refute File.exists?(Path.join(work_dir, "cpp"))
+
+    assert lint.command == [
+             fake_docker,
+             "run",
+             "--rm",
+             "--mount",
+             "type=bind,source=#{work_dir},target=/work",
+             "--workdir",
+             "/work",
+             "verilator/verilator:test",
+             "--lint-only",
+             "--Mdir",
+             "obj_dir",
+             "--top-module",
+             "Counter",
+             "-Wall",
+             "rtl/Counter.sv"
+           ]
+
+    assert lint.log =~ "fake verilator lint ok"
+  end
+
+  test "lint/3 returns structured lint failure", %{
+    bin_dir: bin_dir,
+    input_dir: input_dir,
+    work_dir: work_dir
+  } do
+    fake_docker = write_fake_docker!(bin_dir, failing_lint_script())
+    source_file = write_input_file!(input_dir, "Counter.sv", "module Counter; endmodule\n")
+
+    assert {:error, {:verilator_lint_failed, 65, "lint failed", command}} =
+             VerilatorDocker.lint(
+               "Counter",
+               [source_file],
+               docker: fake_docker,
+               work_dir: work_dir,
+               user: false
+             )
+
+    assert [^fake_docker, "run" | _] = command
+    assert "--lint-only" in command
+    refute "--build" in command
+  end
+
+  test "compile_executable/4 can reuse a persistent docker worker", %{
+    bin_dir: bin_dir,
+    input_dir: input_dir,
+    tmp_dir: tmp_dir,
+    work_dir: work_dir
+  } do
+    log_file = Path.join(tmp_dir, "docker_calls")
+    fake_docker = write_fake_docker!(bin_dir, persistent_worker_docker_script(work_dir, log_file))
+    source_file = write_input_file!(input_dir, "Counter.sv", "module Counter; endmodule\n")
+    wrapper_cpp = write_input_file!(input_dir, "wrapper.cpp", "int main() { return 0; }\n")
+    worker_name = "sv_port_sim_test_#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      case :global.whereis_name({DockerWorker, worker_name}) do
+        :undefined -> :ok
+        pid -> DockerWorker.stop(pid)
+      end
+    end)
+
+    assert {:ok, first} =
+             VerilatorDocker.compile_executable(
+               "Counter",
+               [source_file],
+               wrapper_cpp,
+               docker: fake_docker,
+               work_dir: work_dir,
+               user: false,
+               docker_mode: :persistent,
+               docker_worker_name: worker_name,
+               docker_worker_cleanup: :on_exit
+             )
+
+    assert {:ok, second} =
+             VerilatorDocker.compile_executable(
+               "Counter",
+               [source_file],
+               wrapper_cpp,
+               docker: fake_docker,
+               work_dir: work_dir,
+               user: false,
+               docker_mode: :persistent,
+               docker_worker_name: worker_name,
+               docker_worker_cleanup: :on_exit
+             )
+
+    assert first.container_name == worker_name
+    assert second.container_name == worker_name
+    assert File.exists?(first.executable)
+    assert File.exists?(second.executable)
+
+    calls = File.read!(log_file) |> String.split("\n", trim: true)
+    assert Enum.count(calls, &(&1 == "run")) == 1
+    assert Enum.count(calls, &(&1 == "exec")) == 2
   end
 
   test "compile_executable/4 accepts make_jobs option", %{
@@ -376,6 +504,110 @@ defmodule SvPortSim.Verilator.DockerTest do
     :ok = File.chmod(path, 0o755)
 
     path
+  end
+
+  defp successful_lint_script do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "run" ]; then
+      lint="no"
+      build="no"
+
+      for arg in "$@"; do
+        if [ "$arg" = "--lint-only" ]; then
+          lint="yes"
+        fi
+
+        if [ "$arg" = "--build" ]; then
+          build="yes"
+        fi
+      done
+
+      if [ "$lint" != "yes" ] || [ "$build" = "yes" ]; then
+        echo "expected lint-only docker run" >&2
+        exit 18
+      fi
+
+      echo "fake verilator lint ok"
+      exit 0
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
+  end
+
+  defp failing_lint_script do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "run" ]; then
+      echo "lint failed" >&2
+      exit 65
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
+  end
+
+  defp persistent_worker_docker_script(work_dir, log_file) do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "inspect" ]; then
+      exit 1
+    fi
+
+    if [ "$1" = "run" ]; then
+      echo "run" >> #{log_file}
+      echo "container-id-1"
+      exit 0
+    fi
+
+    if [ "$1" = "exec" ]; then
+      echo "exec" >> #{log_file}
+      top=""
+      previous=""
+
+      for arg in "$@"; do
+        if [ "$previous" = "--top-module" ]; then
+          top="$arg"
+        fi
+
+        previous="$arg"
+      done
+
+      if [ -z "$top" ]; then
+        echo "missing top module" >&2
+        exit 19
+      fi
+
+      /bin/mkdir -p #{work_dir}/obj_dir
+      : > #{work_dir}/obj_dir/V$top
+
+      echo "fake persistent verilator build ok"
+      exit 0
+    fi
+
+    if [ "$1" = "rm" ]; then
+      echo "rm" >> #{log_file}
+      exit 0
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
   end
 
   defp successful_docker_script do

@@ -201,12 +201,148 @@ defmodule SvPortSim.CompilerTest do
       "SvPortSim.peek",
       "SvPortSim.stop",
       "%{bits: \"00001111\", width: 8}",
-      "Supported SystemVerilog subset"
+      "Supported SystemVerilog subset",
+      "SvPortSim.Compiler.lint",
+      "docker_mode: :persistent",
+      "cache: true"
     ]
 
     for fragment <- required_fragments do
       assert readme =~ fragment
     end
+  end
+
+  test "compile/3 supports lint-only mode without executable", %{
+    bin_dir: bin_dir,
+    wrapper_dir: wrapper_dir,
+    work_dir: work_dir
+  } do
+    top_module = unique_module_name("Counter")
+    register_rtl_cleanup([top_module])
+
+    fake_docker = write_fake_docker!(bin_dir, successful_lint_script())
+
+    sources = %{
+      top_module => "module #{top_module}; endmodule\n"
+    }
+
+    assert {:ok, result} =
+             Compiler.compile(
+               top_module,
+               sources,
+               backend: :docker,
+               docker: fake_docker,
+               wrapper_dir: wrapper_dir,
+               work_dir: work_dir,
+               user: false,
+               mode: :lint_only,
+               verilator_args: ["-Wall"]
+             )
+
+    assert result.mode == :lint_only
+    refute Map.has_key?(result, :executable)
+    assert result.build.mode == :lint_only
+    assert result.build.log =~ "fake verilator lint ok"
+    assert "--lint-only" in result.build.command
+    assert "-Wall" in result.build.command
+    refute "--build" in result.build.command
+    refute Enum.any?(result.build.command, &String.ends_with?(&1, "_wrapper.cpp"))
+    refute File.exists?(Path.join([work_dir, "obj_dir", "V#{top_module}"]))
+  end
+
+  test "compile/3 returns structured lint failure", %{
+    bin_dir: bin_dir,
+    wrapper_dir: wrapper_dir,
+    work_dir: work_dir
+  } do
+    top_module = unique_module_name("Counter")
+    register_rtl_cleanup([top_module])
+
+    fake_docker = write_fake_docker!(bin_dir, failing_lint_script())
+
+    sources = %{
+      top_module => "module #{top_module}; endmodule\n"
+    }
+
+    assert {:error, {:verilator_lint_failed, 65, "lint failed", command}} =
+             Compiler.lint(
+               top_module,
+               sources,
+               backend: :docker,
+               docker: fake_docker,
+               wrapper_dir: wrapper_dir,
+               work_dir: work_dir,
+               user: false
+             )
+
+    assert [^fake_docker, "run" | _] = command
+    assert "--lint-only" in command
+    refute "--build" in command
+  end
+
+  test "compile/3 reuses content-addressed cache for identical backend inputs", %{
+    bin_dir: bin_dir,
+    tmp_dir: tmp_dir,
+    wrapper_dir: wrapper_dir
+  } do
+    top_module = unique_module_name("Counter")
+    register_rtl_cleanup([top_module])
+
+    counter_file = Path.join(tmp_dir, "docker_count")
+    fake_docker = write_fake_docker!(bin_dir, counting_successful_docker_script(counter_file))
+    cache_dir = Path.join(tmp_dir, "cache")
+
+    sources = %{top_module => "module #{top_module}; endmodule\n"}
+
+    assert {:ok, first} =
+             Compiler.compile(
+               top_module,
+               sources,
+               backend: :docker,
+               docker: fake_docker,
+               wrapper_dir: wrapper_dir,
+               cache: true,
+               cache_dir: cache_dir,
+               user: false
+             )
+
+    assert first.mode == :build
+    assert first.build.cache_hit? == false
+    assert File.exists?(first.executable)
+
+    assert {:ok, second} =
+             Compiler.compile(
+               top_module,
+               sources,
+               backend: :docker,
+               docker: fake_docker,
+               wrapper_dir: wrapper_dir,
+               cache: true,
+               cache_dir: cache_dir,
+               user: false
+             )
+
+    assert second.build.cache_hit? == true
+    assert second.executable == first.executable
+    assert File.read!(counter_file) |> String.trim() == "1"
+
+    changed_sources = %{top_module => "module #{top_module}; wire changed; endmodule\n"}
+
+    assert {:ok, third} =
+             Compiler.compile(
+               top_module,
+               changed_sources,
+               backend: :docker,
+               docker: fake_docker,
+               wrapper_dir: wrapper_dir,
+               cache: true,
+               cache_dir: cache_dir,
+               user: false
+             )
+
+    assert third.build.cache_hit? == false
+    assert third.executable != first.executable
+    assert File.read!(counter_file) |> String.trim() == "2"
   end
 
   if System.get_env("SV_PORT_SIM_RUN_VERILATOR_TESTS") == "1" do
@@ -584,6 +720,110 @@ defmodule SvPortSim.CompilerTest do
         echo "missing mount or top module" >&2
         exit 17
       fi
+
+      /bin/mkdir -p "$source/obj_dir"
+      : > "$source/obj_dir/V$top"
+
+      echo "fake verilator build ok"
+      exit 0
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
+  end
+
+  defp successful_lint_script do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "run" ]; then
+      lint="no"
+      build="no"
+
+      for arg in "$@"; do
+        if [ "$arg" = "--lint-only" ]; then
+          lint="yes"
+        fi
+
+        if [ "$arg" = "--build" ]; then
+          build="yes"
+        fi
+      done
+
+      if [ "$lint" != "yes" ] || [ "$build" = "yes" ]; then
+        echo "expected lint-only docker run" >&2
+        exit 18
+      fi
+
+      echo "fake verilator lint ok"
+      exit 0
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
+  end
+
+  defp failing_lint_script do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "run" ]; then
+      echo "lint failed" >&2
+      exit 65
+    fi
+
+    echo "unexpected docker args: $*" >&2
+    exit 2
+    """
+  end
+
+  defp counting_successful_docker_script(counter_file) do
+    """
+    if [ "$1" = "version" ] && [ "$2" = "--format" ]; then
+      echo "27.3.1"
+      exit 0
+    fi
+
+    if [ "$1" = "run" ]; then
+      mount=""
+      top=""
+      previous=""
+
+      for arg in "$@"; do
+        if [ "$previous" = "--mount" ]; then
+          mount="$arg"
+        fi
+
+        if [ "$previous" = "--top-module" ]; then
+          top="$arg"
+        fi
+
+        previous="$arg"
+      done
+
+      source="${mount#type=bind,source=}"
+      source="${source%,target=/work}"
+
+      if [ -z "$source" ] || [ -z "$top" ]; then
+        echo "missing mount or top module" >&2
+        exit 17
+      fi
+
+      count=0
+      if [ -f '#{counter_file}' ]; then
+        IFS= read -r count < '#{counter_file}'
+      fi
+
+      count=$((count + 1))
+      echo "$count" > '#{counter_file}'
 
       /bin/mkdir -p "$source/obj_dir"
       : > "$source/obj_dir/V$top"
