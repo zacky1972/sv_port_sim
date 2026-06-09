@@ -143,6 +143,94 @@ The example uses scalar `logic` clock/reset/valid ports and one-dimensional pack
 
 When the Docker Verilator backend is used, the produced executable is built for the container platform. The executable can be launched directly with `SvPortSim.start_link/1` when the host platform is compatible with that output, such as Linux CI using the standard `verilator/verilator` image. On non-Linux hosts, the Docker backend still validates RTL expansion, wrapper generation, and Verilator compilation, but direct Port execution of that Linux executable requires a compatible runtime environment.
 
+
+## Fast Verilator validation modes
+
+`SvPortSim.Compiler.compile/3` defaults to `mode: :build`, which preserves the existing executable-producing Docker backend workflow:
+
+```elixir
+{:ok, build} =
+  SvPortSim.Compiler.compile(top_module, sources,
+    signal_specs: signal_specs,
+    mode: :build
+  )
+
+build.executable
+#=> ".../obj_dir/VExampleTop"
+```
+
+For interactive generated-RTL validation, use lint-only mode. It runs Verilator with `--lint-only`, returns command and log metadata, and does not return a runnable executable:
+
+```elixir
+{:ok, lint} =
+  SvPortSim.Compiler.lint(top_module, sources,
+    signal_specs: signal_specs,
+    verilator_args: ["-Wall"]
+  )
+
+lint.mode
+#=> :lint_only
+
+Map.has_key?(lint, :executable)
+#=> false
+```
+
+The same mode can be selected through `compile/3`:
+
+```elixir
+SvPortSim.Compiler.compile(top_module, sources,
+  signal_specs: signal_specs,
+  mode: :lint_only
+)
+```
+
+Repeated identical build or lint jobs can enable a content-addressed cache. The cache key includes the top module, source map contents, generated wrapper contents, signal specs, Verilator image and arguments, SvPortSim version, and compile mode.
+
+```elixir
+{:ok, result} =
+  SvPortSim.Compiler.compile(top_module, sources,
+    signal_specs: signal_specs,
+    cache: true,
+    cache_dir: "_build/sv_port_sim/cache"
+  )
+
+result.build.cache_hit?
+#=> false
+```
+
+When Docker startup dominates latency, use persistent Docker mode. The default `docker_mode: :run_once` keeps the previous isolated behavior, starting a fresh `docker run --rm` job for each compile. `docker_mode: :persistent` starts or reuses a long-running container and executes Verilator jobs inside it with `docker exec`.
+
+```elixir
+{:ok, worker} =
+  SvPortSim.Verilator.DockerWorker.start_link(
+    docker_worker_name: "sv_port_sim_verilator",
+    workspace_dir: "_build/sv_port_sim/docker_worker"
+  )
+
+{:ok, lint} =
+  SvPortSim.Compiler.lint(top_module, sources,
+    signal_specs: signal_specs,
+    docker_mode: :persistent,
+    docker_worker: worker
+  )
+
+:ok = SvPortSim.Verilator.DockerWorker.cleanup(worker)
+:ok = SvPortSim.Verilator.DockerWorker.stop(worker)
+```
+
+Tradeoffs:
+
+- `mode: :lint_only` is fastest for syntax and lint validation, but it produces no executable and does not exercise the generated C++ wrapper as a runnable simulator.
+- `mode: :build` keeps the full executable-producing check and remains the default.
+- `docker_mode: :run_once` is isolated and simple; `docker_mode: :persistent` avoids repeated container startup but requires explicit worker/container cleanup.
+- `cache: true` skips identical successful jobs; `cache: false` preserves the previous no-cache behavior and is the default.
+- The Docker backend is the supported backend in this release. A local Verilator backend is an optional future extension for developers who want to bypass Docker when reproducibility through a Docker image is not required.
+
+The Docker backend remains the only implemented Verilator backend in this
+release. A future local Verilator backend could avoid Docker startup and bind
+mount overhead for developers who already have Verilator installed, but it would
+trade away the reproducibility of the pinned/containerized Docker environment.
+
 ## Runtime protocol and supported SystemVerilog subset
 
 This is the high-level user-facing runtime contract. The detailed executable specifications live in:
