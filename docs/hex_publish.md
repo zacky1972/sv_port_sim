@@ -242,7 +242,7 @@ After publishing, verify all of the following.
 Example smoke test:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 mix new /tmp/sv_port_sim_hex_smoke
 cd /tmp/sv_port_sim_hex_smoke
 ```
@@ -250,7 +250,7 @@ cd /tmp/sv_port_sim_hex_smoke
 Edit `mix.exs` and add:
 
 ```elixir
-{:sv_port_sim, "~> 0.1.0"}
+{:sv_port_sim, "~> 0.2.0"}
 ```
 
 Then run:
@@ -260,7 +260,7 @@ mix deps.get
 mix compile
 ```
 
-Replace `0.1.0` with the actual published version.
+Replace `0.2.0` with the actual published version for future releases.
 
 ## Revert and update procedure
 

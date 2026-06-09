@@ -204,7 +204,8 @@ When Docker startup dominates latency, use persistent Docker mode. The default `
 {:ok, worker} =
   SvPortSim.Verilator.DockerWorker.start_link(
     docker_worker_name: "sv_port_sim_verilator",
-    workspace_dir: "_build/sv_port_sim/docker_worker"
+    workspace_dir: "_build/sv_port_sim/docker_worker",
+    cleanup: :on_exit
   )
 
 {:ok, lint} =
@@ -214,7 +215,6 @@ When Docker startup dominates latency, use persistent Docker mode. The default `
     docker_worker: worker
   )
 
-:ok = SvPortSim.Verilator.DockerWorker.cleanup(worker)
 :ok = SvPortSim.Verilator.DockerWorker.stop(worker)
 ```
 
@@ -224,12 +224,7 @@ Tradeoffs:
 - `mode: :build` keeps the full executable-producing check and remains the default.
 - `docker_mode: :run_once` is isolated and simple; `docker_mode: :persistent` avoids repeated container startup but requires explicit worker/container cleanup.
 - `cache: true` skips identical successful jobs; `cache: false` preserves the previous no-cache behavior and is the default.
-- The Docker backend is the supported backend in this release. A local Verilator backend is an optional future extension for developers who want to bypass Docker when reproducibility through a Docker image is not required.
-
-The Docker backend remains the only implemented Verilator backend in this
-release. A future local Verilator backend could avoid Docker startup and bind
-mount overhead for developers who already have Verilator installed, but it would
-trade away the reproducibility of the pinned/containerized Docker environment.
+- The Docker backend is the only implemented Verilator backend in this release. A future local Verilator backend could avoid Docker startup and bind-mount overhead for developers who already have Verilator installed, but it would trade away the reproducibility of the pinned/containerized Docker environment.
 
 ## Runtime protocol and supported SystemVerilog subset
 

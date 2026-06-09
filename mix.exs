@@ -1,7 +1,7 @@
 defmodule SvPortSim.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/zacky1972/sv_port_sim"
   @description "SvPortSim: Elixir interface for driving Verilated SystemVerilog modules through Ports, with each simulation instance managed as a GenServer."
 
